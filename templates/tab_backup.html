@@ -1,0 +1,101 @@
+<div class="lb-content">
+
+<h2><TMPL_VAR BACKUP.TITLE></h2>
+<p class="sm-hint"><TMPL_VAR BACKUP.HINT></p>
+
+<div class="lb-form-row" id="ms-row" style="display:none;">
+	<label class="lb-form-label" for="ms-select"><TMPL_VAR COMMON.MINISERVER></label>
+	<div class="lb-form-field">
+		<select class="lb-input" id="ms-select"></select>
+	</div>
+</div>
+
+<div class="lb-actions">
+	<button type="button" class="lb-btn lb-btn-primary" id="btn-backup-now"><TMPL_VAR BACKUP.BTN_NOW></button>
+</div>
+
+<div id="backup-message" class="sm-msg" style="display:none;"></div>
+
+<details class="lb-collapsible" open>
+	<summary style="font-size:1.15em; font-weight:700;"><TMPL_VAR BACKUP.SCHEDULE></summary>
+	<div class="lb-collapsible-content">
+
+		<div class="lb-form-row">
+			<label class="lb-form-label" for="backup-keep"><TMPL_VAR BACKUP.KEEP></label>
+			<div class="lb-form-field">
+				<input class="lb-input sm-number" type="number" id="backup-keep" min="1" max="100" value="10">
+			</div>
+			<div class="lb-form-help"><TMPL_VAR BACKUP.KEEP_HINT></div>
+		</div>
+
+		<div class="lb-form-row">
+			<label class="lb-form-label" for="sched-enabled"><TMPL_VAR BACKUP.SCHEDULE_ON></label>
+			<div class="lb-form-field"><input type="checkbox" id="sched-enabled"></div>
+		</div>
+
+		<div class="lb-form-row">
+			<label class="lb-form-label"><TMPL_VAR BACKUP.WEEKDAYS></label>
+			<div class="lb-form-field sm-days" id="sched-days"></div>
+		</div>
+
+		<div class="lb-form-row">
+			<label class="lb-form-label" for="sched-hour"><TMPL_VAR BACKUP.TIME></label>
+			<div class="lb-form-field sm-time">
+				<input class="lb-input sm-number" type="number" id="sched-hour" min="0" max="23" value="3">
+				<span>:</span>
+				<input class="lb-input sm-number" type="number" id="sched-minute" min="0" max="59" step="5" value="0">
+			</div>
+		</div>
+
+		<div class="lb-form-row">
+			<label class="lb-form-label" for="sched-weeks"><TMPL_VAR BACKUP.EVERY_WEEKS></label>
+			<div class="lb-form-field">
+				<input class="lb-input sm-number" type="number" id="sched-weeks" min="1" max="12" value="1">
+			</div>
+		</div>
+
+		<div class="lb-actions">
+			<button type="button" class="lb-btn lb-btn-primary" id="btn-backup-save"><TMPL_VAR COMMON.SAVE></button>
+		</div>
+
+	</div>
+</details>
+
+<table class="sm-table" id="backup-table">
+	<thead>
+		<tr>
+			<th><TMPL_VAR BACKUP.COL_DATE></th>
+			<th><TMPL_VAR BACKUP.COL_SIZE></th>
+			<th><TMPL_VAR BACKUP.COL_ENTRIES></th>
+			<th><TMPL_VAR BACKUP.COL_ACTIONS></th>
+		</tr>
+	</thead>
+	<tbody id="backup-list">
+		<tr><td colspan="4"><TMPL_VAR COMMON.LOADING></td></tr>
+	</tbody>
+</table>
+
+<div class="sm-job" id="job-box" style="display:none;">
+	<p class="sm-job-title" id="job-title"></p>
+	<ul class="sm-job-list" id="job-list"></ul>
+</div>
+
+<!-- Restore. Shows what the archive holds and who of it still exists, and does
+     nothing until the button below is pressed. -->
+<div class="sm-dialog" id="restore-dialog" style="display:none;">
+	<div class="sm-dialog-box">
+		<h3><TMPL_VAR BACKUP.RESTORE_TITLE></h3>
+		<p class="sm-hint"><TMPL_VAR BACKUP.RESTORE_BODY></p>
+		<p class="sm-hint" id="restore-info"></p>
+		<div id="restore-entries"></div>
+		<label class="sm-reboot-row">
+			<input type="checkbox" id="restore-reboot"> <TMPL_VAR OVERVIEW.AUTO_REBOOT>
+		</label>
+		<div class="lb-actions">
+			<button type="button" class="lb-btn" id="btn-restore-cancel"><TMPL_VAR COMMON.CANCEL></button>
+			<button type="button" class="lb-btn lb-btn-primary" id="btn-restore-confirm"><TMPL_VAR BACKUP.RESTORE_CONFIRM></button>
+		</div>
+	</div>
+</div>
+
+</div>

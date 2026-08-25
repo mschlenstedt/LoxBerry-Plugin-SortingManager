@@ -1,0 +1,57 @@
+<div class="lb-content">
+
+<h2><TMPL_VAR WATCH.TITLE></h2>
+<p class="sm-hint"><TMPL_VAR WATCH.HINT></p>
+
+<div class="lb-form-row" id="ms-row" style="display:none;">
+	<label class="lb-form-label" for="ms-select"><TMPL_VAR COMMON.MINISERVER></label>
+	<div class="lb-form-field">
+		<select class="lb-input" id="ms-select"></select>
+	</div>
+</div>
+
+<div id="watch-notconfigured" class="sm-warning" style="display:none;">
+	<TMPL_VAR WATCH.NOT_CONFIGURED>
+</div>
+
+<div id="watch-form">
+
+	<div class="lb-form-row">
+		<label class="lb-form-label" for="watch-enabled"><TMPL_VAR WATCH.ENABLED></label>
+		<div class="lb-form-field"><input type="checkbox" id="watch-enabled"></div>
+	</div>
+
+	<div class="lb-form-row">
+		<label class="lb-form-label" for="watch-interval"><TMPL_VAR WATCH.INTERVAL></label>
+		<div class="lb-form-field">
+			<input class="lb-input sm-number" type="number" id="watch-interval" min="5" step="5" value="15">
+		</div>
+		<div class="lb-form-help"><TMPL_VAR WATCH.INTERVAL_HINT></div>
+	</div>
+
+	<div class="lb-form-row">
+		<label class="lb-form-label" for="watch-reboot"><TMPL_VAR WATCH.AUTO_REBOOT></label>
+		<div class="lb-form-field"><input type="checkbox" id="watch-reboot"></div>
+		<div class="lb-form-help"><TMPL_VAR WATCH.AUTO_REBOOT_HINT></div>
+	</div>
+
+	<div class="lb-form-row">
+		<label class="lb-form-label"><TMPL_VAR WATCH.LAST_RUN></label>
+		<div class="lb-form-field"><span id="watch-last">–</span></div>
+	</div>
+
+	<div class="lb-form-row">
+		<label class="lb-form-label"><TMPL_VAR WATCH.LAST_TS></label>
+		<div class="lb-form-field"><span id="watch-lastts">–</span></div>
+	</div>
+
+	<div id="watch-message" class="sm-msg" style="display:none;"></div>
+
+	<div class="lb-actions">
+		<button type="button" class="lb-btn" id="btn-watch-now"><TMPL_VAR WATCH.BTN_RUN_NOW></button>
+		<button type="button" class="lb-btn lb-btn-primary" id="btn-watch-save"><TMPL_VAR COMMON.SAVE></button>
+	</div>
+
+</div>
+
+</div>
