@@ -11,7 +11,7 @@ package SortingManager;
 use strict;
 use warnings;
 use JSON;
-use Fcntl qw( :flock O_RDWR O_CREAT );
+use Fcntl qw( :flock O_RDWR O_WRONLY O_CREAT O_TRUNC );
 use LoxBerry::System;
 use LoxBerry::IO;
 use Net::FTP;
@@ -678,6 +678,9 @@ sub job_file
 sub _write_job
 {
 	my ($state) = @_;
+	# Whoever writes the state is the job - that is how a later caller finds
+	# out whether the process is still alive.
+	$state->{pid} = $$ if ( !defined $state->{pid} );
 	my $file = job_file();
 	return if (!$file);
 	my $dir = $file;
@@ -690,6 +693,120 @@ sub _write_job
 		print $fh JSON->new->pretty->canonical(1)->encode($state);
 		close($fh);
 	}
+}
+
+# The job runner is a separate process, so the caller - a CGI with a timeout of
+# its own - is free the moment it has been started. Which process that is can be
+# replaced for the tests.
+our $spawn_hook;
+our $job_runner;
+
+sub job_spec_file
+{
+	my $file = job_file();
+	return undef if (!$file);
+	$file =~ s{/[^/]+$}{/job.spec};
+	return $file;
+}
+
+# "Is one still running?" cannot be answered from the state alone: a crashed job
+# leaves its last state behind for good. The PID decides - and in the moment
+# between the start and the child's first sign of life there is none yet, so a
+# short grace period stands in for it.
+sub _job_running
+{
+	my $st = job_status();
+	return 0 if ( !$st or ( $st->{state} // '' ) eq 'done' );
+
+	my $pid = $st->{pid} || 0;
+	return ( kill( 0, $pid ) ? 1 : 0 ) if ( $pid > 1 );
+	return ( ( _now() - ( $st->{started} || 0 ) ) < 30 ) ? 1 : 0;
+}
+
+sub spawn_job
+{
+	my ($spec) = @_;
+	return { ok => 0, error => 'nospec' } if ( ref($spec) ne 'HASH' );
+	return { ok => 0, error => 'jobrunning' } if ( _job_running() );
+
+	my $file = job_spec_file();
+	return { ok => 0, error => 'nojobdir' } if (!$file);
+	my $dir = $file;
+	$dir =~ s{/[^/]+$}{};
+	if ( ! -d $dir ) {
+		eval { make_path($dir) };
+		return { ok => 0, error => 'nojobdir' } if ( ! -d $dir );
+	}
+
+	# The spec can carry passwords for the target users - it lives in RAM and
+	# nobody but us may read it.
+	return { ok => 0, error => 'nojobdir' } if ( ! sysopen( my $fh, $file, O_WRONLY | O_CREAT | O_TRUNC, 0600 ) );
+	print $fh JSON->new->canonical(1)->encode($spec);
+	close($fh);
+	chmod 0600, $file;
+
+	_write_job( {
+		state   => 'starting',
+		pid     => 0,
+		kind    => $spec->{kind},
+		started => _now(),
+		total   => scalar( @{ $spec->{targets} || [] } ),
+		done    => 0,
+		results => [],
+	} );
+
+	my $runner = $job_runner || "$LoxBerry::System::lbpbindir/sm_job.pl";
+	my $pid;
+	if ($spawn_hook) {
+		$pid = $spawn_hook->( $runner, $file );
+	}
+	else {
+		$pid = _double_fork($runner);
+		return { ok => 0, error => 'forkfailed' } if (!$pid);
+	}
+
+	return { ok => 1, pid => $pid };
+}
+
+# Two forks with setsid in between: the middle process dies right away, so the
+# runner is orphaned and adopted by init instead of hanging off the web server.
+# Its PID travels back through a pipe - without it nobody could tell later
+# whether the job is still alive.
+sub _double_fork
+{
+	my ($runner) = @_;
+	return undef if ( ! pipe( my $rd, my $wr ) );
+
+	my $mid = fork();
+	return undef if (!defined $mid);
+
+	if ( $mid == 0 ) {
+		close($rd);
+		POSIX::setsid();
+		my $child = fork();
+		if ( !defined $child ) { POSIX::_exit(1); }
+		if ( $child != 0 ) {
+			print $wr "$child\n";
+			close($wr);
+			POSIX::_exit(0);
+		}
+		close($wr);
+		CORE::open( STDIN,  '<', '/dev/null' );
+		CORE::open( STDOUT, '>', '/dev/null' );
+		CORE::open( STDERR, '>', '/dev/null' );
+		# Hand our own search path on: on a normal installation PERL5LIB carries
+		# the LoxBerry libraries anyway, but a caller started with -I (a working
+		# copy, a test) would otherwise leave the runner unable to load them.
+		exec( $^X, ( map { "-I$_" } grep { !ref($_) and -d $_ } @INC ), $runner )
+			or POSIX::_exit(1);
+	}
+
+	close($wr);
+	my $pid = <$rd>;
+	close($rd);
+	waitpid( $mid, 0 );
+	chomp($pid) if ( defined $pid );
+	return ( $pid && $pid =~ /^\d+$/ ) ? $pid : undef;
 }
 
 sub job_status
@@ -712,6 +829,7 @@ sub run_copy_job
 	my @targets = @{ $spec->{targets} || [] };
 	my %state = (
 		state          => 'running',
+		kind           => 'copy',
 		msnr           => $msnr,
 		source         => $spec->{source},
 		total          => scalar(@targets),

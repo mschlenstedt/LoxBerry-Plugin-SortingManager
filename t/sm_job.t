@@ -92,4 +92,65 @@ my $noreboot = SortingManager::run_copy_job(1, {
 is_deeply( \@calls, [ 'tablet:tab-uuid' ], 'ohne auto_reboot kein Reboot' );
 is( $noreboot->{reboot_pending}, 1, 'aber der Job meldet, dass einer noetig waere' );
 
+# ==========================================================================
+# spawn_job - ein Lauf zur Zeit
+# ==========================================================================
+
+my @spawned;
+$SortingManager::spawn_hook = sub { push @spawned, $_[1]; return 4711; };
+
+sub set_status {
+	my (%st) = @_;
+	open( my $fh, '>', $SortingManager::job_file ) or die $!;
+	print $fh JSON->new->encode( \%st );
+	close($fh);
+}
+
+# Eine PID, die es sicher nicht gibt
+my $DEAD = 999999;
+$DEAD-- while ( $DEAD > 2 and kill( 0, $DEAD ) );
+
+# --- Abgeschlossener Lauf blockiert nicht ----------------------------------
+@spawned = ();
+set_status( state => 'done', pid => $$ );
+my $sp = SortingManager::spawn_job( { kind => 'backup', msnr => 1 } );
+is( $sp->{ok},  1,    'nach einem abgeschlossenen Lauf wird gestartet' );
+is( $sp->{pid}, 4711, 'die gemeldete PID kommt zurueck' );
+is( scalar(@spawned), 1, 'der Runner wurde einmal gestartet' );
+
+# Der Auftrag liegt als Datei bereit
+my $specfile = $spawned[0];
+ok( -e $specfile, 'die Auftragsdatei existiert' );
+my $spec;
+{ local $/; open( my $fh, '<', $specfile ); $spec = JSON::from_json(<$fh>); close($fh); }
+is( $spec->{kind}, 'backup', 'mit der Art des Auftrags' );
+is( ( stat($specfile) )[2] & 07777, 0600,
+    'und 0600 - sie kann Passwoerter enthalten' );
+
+# --- Laufender Prozess blockiert -------------------------------------------
+@spawned = ();
+set_status( state => 'running', pid => $$ );
+my $busy = SortingManager::spawn_job( { kind => 'copy' } );
+is( $busy->{ok},    0,            'ein laufender Job blockiert' );
+is( $busy->{error}, 'jobrunning', 'mit eindeutigem Fehlercode' );
+is( scalar(@spawned), 0, 'und es wird nichts gestartet' );
+
+# --- Tote PID blockiert nicht ----------------------------------------------
+@spawned = ();
+set_status( state => 'running', pid => $DEAD );
+is( SortingManager::spawn_job( { kind => 'copy' } )->{ok}, 1,
+    'ein abgestuerzter Job blockiert nicht ewig' );
+
+# --- Start ohne gemeldete PID ----------------------------------------------
+# Zwischen spawn_job und dem ersten Lebenszeichen des Kindes steht noch keine
+# PID im Status. Kurz danach gilt der Start als laufend, spaeter nicht mehr.
+@spawned = ();
+set_status( state => 'starting', pid => 0, started => SortingManager::lox_now() );
+is( SortingManager::spawn_job( { kind => 'copy' } )->{error}, 'jobrunning',
+    'ein gerade angelaufener Start blockiert' );
+
+set_status( state => 'starting', pid => 0, started => SortingManager::lox_now() - 60 );
+is( SortingManager::spawn_job( { kind => 'copy' } )->{ok}, 1,
+    'ein haengengebliebener Start blockiert nicht ewig' );
+
 done_testing();
