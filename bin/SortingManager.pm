@@ -1150,6 +1150,17 @@ sub restore_backup
 	};
 }
 
+# A file name coming from a browser must never reach the filesystem unchecked.
+# Only a plain archive name directly inside the backup directory passes.
+sub safe_backup_file
+{
+	my ($file) = @_;
+	return undef if ( !$file or $file =~ m{\.\.} );
+	my $dir = backup_dir();
+	return undef if (!$dir);
+	return ( $file =~ m{^\Q$dir\E/[^/]+\.tar\.gz$} ) ? $file : undef;
+}
+
 sub delete_backup
 {
 	my ($file) = @_;

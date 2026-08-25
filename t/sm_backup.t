@@ -207,4 +207,17 @@ is( SortingManager::delete_backup("$dir/gibtesnicht.tar.gz")->{error}, 'notfound
 	is( $r->{error}, 'nobackupdir', 'wird gemeldet, nicht geworfen' );
 }
 
+# --- Pfadpruefung fuer Dateinamen aus dem Browser ---------------------------
+{
+	local $SortingManager::backup_dir = $dir;
+	my $good = "$dir/sorting_ABCDEF010203_20260101_000000.tar.gz";
+	is( SortingManager::safe_backup_file($good), $good, 'ein Archiv im Ablageordner' );
+	is( SortingManager::safe_backup_file('/etc/passwd'), undef, 'Datei ausserhalb' );
+	is( SortingManager::safe_backup_file("$dir/../etc/passwd.tar.gz"), undef, 'Ausbruch per ..' );
+	is( SortingManager::safe_backup_file("$dir/unter/ordner.tar.gz"), undef, 'Unterordner' );
+	is( SortingManager::safe_backup_file("$dir/archiv.zip"), undef, 'falsche Endung' );
+	is( SortingManager::safe_backup_file(''), undef, 'leerer Name' );
+	is( SortingManager::safe_backup_file(undef), undef, 'kein Name' );
+}
+
 done_testing();
