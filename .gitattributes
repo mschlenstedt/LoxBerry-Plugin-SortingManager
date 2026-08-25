@@ -1,0 +1,3 @@
+# The plugin runs on LoxBerry (Linux). Every text file must keep LF endings -
+# CRLF breaks shell scripts, Perl CGIs and the cron wrapper.
+* text=auto eol=lf
