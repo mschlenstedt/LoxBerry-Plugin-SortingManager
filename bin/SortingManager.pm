@@ -1040,6 +1040,111 @@ sub delete_backup
 	return { ok => 1 };
 }
 
+##################################################################
+# Watch
+#
+# The cron entry point runs every five minutes and asks here whether anything
+# is due. Keeping the decision in the module - and out of the cron script -
+# means it can be tested without a clock and without a Miniserver.
+##################################################################
+
+our $now_hook;
+
+sub _now { return $now_hook ? $now_hook->() : lox_now(); }
+
+sub watch_due
+{
+	my ($entry, $now) = @_;
+	return 0 if ( ref($entry) ne 'HASH' );
+	my $w = $entry->{watch};
+	return 0 if ( ref($w) ne 'HASH' or !$w->{enabled} );
+
+	$now = _now() if (!defined $now);
+	return 1 if ( !$w->{last_run} );
+	return ( ( $now - $w->{last_run} ) >= ( $w->{interval_min} || 15 ) * 60 ) ? 1 : 0;
+}
+
+# Weekday, time of day and the week interval - all three have to agree. The
+# week interval is counted as full weeks BETWEEN two runs: with every_weeks 1
+# every selected weekday runs, which is what a plan like "Monday and Thursday"
+# means; only from 2 upwards does a waiting period apply.
+sub backup_due
+{
+	my ($entry, $now) = @_;
+	return 0 if ( ref($entry) ne 'HASH' );
+	my $s = $entry->{backup}{schedule};
+	return 0 if ( ref($s) ne 'HASH' or !$s->{enabled} );
+
+	$now = _now() if (!defined $now);
+	my $unix = LoxBerry::System::lox2epoch($now);
+	my ( $min, $hour, $mday, $mon, $year, $wday ) = ( localtime($unix) )[ 1, 2, 3, 4, 5, 6 ];
+
+	return 0 if ( !grep { $_ == $wday } @{ $s->{days} || [] } );
+	return 0 if ( $hour * 60 + $min < ( $s->{hour} || 0 ) * 60 + ( $s->{minute} || 0 ) );
+
+	my $last = $s->{last_run} || 0;
+	return 1 if (!$last);
+
+	my $last_unix = LoxBerry::System::lox2epoch($last);
+	my @lt = localtime($last_unix);
+	return 0 if ( $lt[3] == $mday and $lt[4] == $mon and $lt[5] == $year );
+
+	my $min_days = ( ( $s->{every_weeks} || 1 ) - 1 ) * 7;
+	return 0 if ( ( $unix - $last_unix ) < $min_days * 86400 );
+	return 1;
+}
+
+# Detection runs on the timestamp of the source file: if it moved, the user
+# rearranged their app and the targets get the new state.
+sub run_watch
+{
+	my ($msnr, %opts) = @_;
+
+	my $s = ms_serial($msnr);
+	return { ok => 0, error => ( $s->{error} || 'notreachable' ) } if (! $s->{ok});
+
+	my $cfg   = plugin_config();
+	my $entry = ms_entry( $cfg, $s->{serial} );
+	my @targets = @{ $entry->{targets} || [] };
+
+	# Not set up yet: leave last_run alone, otherwise the first real run after
+	# the configuration is saved would wait out a whole interval.
+	return { ok => 0, skipped => 1, reason => 'notconfigured' }
+		if ( !$entry->{source} or !@targets );
+
+	my $r = read_sorting( $msnr, $entry->{source} );
+	return { ok => 0, error => ( $r->{error} || 'notfound' ) } if (! $r->{ok});
+
+	my $now  = _now();
+	my $seen = $entry->{watch}{last_source_ts} || 0;
+
+	if ( !$opts{force} and "$r->{ts}" eq "$seen" ) {
+		$entry->{watch}{last_run} = $now;
+		save_config($cfg);
+		return { ok => 1, changed => 0, source_ts => $r->{ts} };
+	}
+
+	my $job = run_copy_job( $msnr, {
+		source      => $entry->{source},
+		targets     => \@targets,
+		auto_reboot => ( $entry->{watch}{auto_reboot} ? 1 : 0 ),
+		passwords   => $opts{passwords},
+	} );
+
+	$entry->{watch}{last_source_ts} = $r->{ts};
+	$entry->{watch}{last_run}       = $now;
+	save_config($cfg);
+
+	my %out = (
+		ok        => 1,
+		changed   => 1,
+		source_ts => $r->{ts},
+		copied    => ( $job->{results} || [] ),
+	);
+	$out{notify} = 'rebootrequired' if ( $job->{reboot_pending} );
+	return \%out;
+}
+
 #####################################################
 # Finally 1; ########################################
 #####################################################
