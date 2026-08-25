@@ -1,0 +1,7 @@
+#!/bin/sh
+
+# Runs the watch: copies the sorting when the source changed, and creates the
+# scheduled backup. It decides on its own whether anything is due, so a changed
+# interval takes effect without touching cron.
+
+exec REPLACELBPBINDIR/sm_watch.pl
