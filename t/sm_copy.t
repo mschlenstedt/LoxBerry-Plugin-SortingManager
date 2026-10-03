@@ -82,6 +82,14 @@ $LoxBerry::Auth::transport = sub {
 	}
 	if ($url =~ m{/jdev/sys/gettoken/}) {
 		return (401, '<html>401</html>', '401 Unauthorized') if ($behave{gettoken} eq '401');
+		# Ein normaler Benutzer hat kein SysWS-Recht (0x100). Fordert man es mit
+		# an, antwortet der Miniserver mit 412 - am Geraet gemessen (17.1.7.3).
+		if ($behave{gettoken} eq 'user') {
+			my ($perm) = $url =~ m{/jdev/sys/gettoken/[^/]+/[^/]+/(\d+)/};
+			return (412, '<html>412</html>', '412 Precondition Failed') if ( !defined $perm or ( $perm & 0x100 ) );
+			return (200, '{"LL":{"control":"gettoken","code":"200","value":{"token":"TOKUSR","key":"'
+			           . $KEY . '","validUntil":999999999,"tokenRights":' . $perm . ',"unsecurePass":false}}}', '200 OK');
+		}
 		return (200, '{"LL":{"control":"gettoken","code":"200","value":{"token":"TOK123","key":"'
 		           . $KEY . '","validUntil":999999999,"tokenRights":1924,"unsecurePass":false}}}', '200 OK');
 	}
@@ -125,6 +133,20 @@ is( $p->{ok},       1,        'der geschriebene Rumpf ist wohlgeformt' );
 is( $p->{ts},       $r->{ts}, 'Praefix traegt den gemeldeten Zeitstempel' );
 is( $p->{data}{ts}, $r->{ts}, 'und innen steht derselbe' );
 is( SortingManager::control_count($p->{data}), 3, 'Inhalt der Quelle unveraendert' );
+
+# --- Normaler Benutzer ohne SysWS-Recht --------------------------------------
+# Zum Schreiben der eigenen Sortierung genuegt das App-Recht. Wird mehr
+# verlangt, verweigert der Miniserver schon den Token.
+@posts = ();
+$behave{gettoken} = 'user';
+LoxBerry::Auth::_cache_clear();
+unlink $LoxBerry::Auth::store_file;    # kein Token aus dem Gutfall weiterverwenden
+my $usr = SortingManager::copy_to_user(1, $SRC, 'gast', password => 'geheim');
+is( $usr->{ok}, 1, 'normaler Benutzer ohne SysWS-Recht wird kopiert' )
+	or diag( "error: " . ( $usr->{error} // '' ) . " " . ( $usr->{message} // '' ) );
+is( scalar(@posts), 1, 'und genau einmal geschrieben' );
+$behave{gettoken} = 'ok';
+LoxBerry::Auth::_cache_clear();
 
 # --- Fehlerfaelle ----------------------------------------------------------
 my $noone = SortingManager::copy_to_user(1, 'gibtesnicht', 'gast', password => 'geheim');

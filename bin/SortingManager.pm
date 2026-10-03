@@ -793,7 +793,11 @@ sub copy_to_user
 	_dbg( "user $target_name: restamped to ts $ts, " . length($body) . " bytes" );
 	_dbg( "user $target_name: password supplied: " . ( defined $opts{password} ? 'yes (entered)'
 	      : defined $password ? 'yes (LoxBerry Miniserver credentials)' : 'no - a stored token is needed' ) );
-	my %authopts = ( user => $target_name, method => 'POST', content => $body );
+	# Only the app right: writing one's own sorting needs nothing more, and a
+	# normal user does not have SysWS - asking for the default 0x104 makes the
+	# Miniserver refuse the token with 412.
+	my %authopts = ( user => $target_name, method => 'POST', content => $body,
+	                 perm => $LoxBerry::Auth::PERM_APP );
 	$authopts{password} = $password if ( defined $password );
 
 	_dbg("user $target_name: POST /jdev/sps/setusersettings");
@@ -811,7 +815,7 @@ sub copy_to_user
 	# Read it back unless the caller opted out. A 200 only says the Miniserver
 	# accepted the request, not that it stored what we sent.
 	if ( !defined $opts{verify} or $opts{verify} ) {
-		my %vopts = ( user => $target_name );
+		my %vopts = ( user => $target_name, perm => $LoxBerry::Auth::PERM_APP );
 		$vopts{password} = $password if ( defined $password );
 		_dbg("user $target_name: verifying via GET /jdev/sps/getusersettings");
 		my ($back) = LoxBerry::Auth::request( $msnr, '/jdev/sps/getusersettings', %vopts );
