@@ -15,9 +15,13 @@ like( $now, qr/^\d+$/, 'lox_now liefert eine Zahl' );
 cmp_ok( $now, '>', 550_000_000, 'lox_now liegt nach Mitte 2026' );
 cmp_ok( $now, '<', 900_000_000, 'lox_now liegt vor dem Jahr 2037' );
 
-# Gegenprobe gegen die Core-Funktion - beide muessen dieselbe Epoche nutzen
-is( abs( $now - LoxBerry::System::epoch2lox() ) <= 1, 1,
-    'lox_now stimmt mit LoxBerry::System::epoch2lox ueberein' );
+# Die App stempelt in UTC, nicht in Ortszeit wie LoxBerry::System::epoch2lox.
+# Am Geraet gemessen: eine Aenderung um 13:11:49 MESZ trug 560257909.
+is( abs( $now - ( time() - 1230768000 ) ) <= 1, 1, 'lox_now zaehlt ab 01.01.2009 UTC' );
+is( SortingManager::lox2unix(560257909), 1791025909, 'App-Zeitstempel -> 2026-10-03 11:11:49 UTC' );
+is( SortingManager::unix2lox(1791025909), 560257909, 'und zurueck' );
+is( SortingManager::lox2unix(0),     undef, 'kein Zeitstempel bleibt keiner' );
+is( SortingManager::lox2unix(undef), undef, 'undef bleibt undef' );
 
 # --- parse_sorting ---------------------------------------------------------
 my $json = '{"userDefaultStructure":{"a":{"room":{"position":0}},"b":{}},'

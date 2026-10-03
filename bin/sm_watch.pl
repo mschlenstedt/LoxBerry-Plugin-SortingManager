@@ -81,12 +81,12 @@ foreach my $serial ( sort keys %{ $cfg->{miniservers} } ) {
 		my $b = ( $entry->{backup} || {} )->{schedule} || {};
 		logger()->DEB( sprintf( '%s (Miniserver %s): watch %s, every %d min, last run %s -> %s',
 			$serial, $msnr, ( $w->{enabled} ? 'on' : 'off' ), $w->{interval_min} || 15,
-			( $w->{last_run} ? scalar localtime( LoxBerry::System::lox2epoch( $w->{last_run} ) ) : 'never' ),
+			( $w->{last_run} ? scalar localtime( SortingManager::lox2unix( $w->{last_run} ) ) : 'never' ),
 			( $watch_due ? 'due' : 'not due' ) ) );
 		logger()->DEB( sprintf( '%s: backup schedule %s, days [%s] at %02d:%02d, every %d week(s), last run %s -> %s',
 			$serial, ( $b->{enabled} ? 'on' : 'off' ), join( ',', @{ $b->{days} || [] } ), $b->{hour} || 0, $b->{minute} || 0,
 			$b->{every_weeks} || 1,
-			( $b->{last_run} ? scalar localtime( LoxBerry::System::lox2epoch( $b->{last_run} ) ) : 'never' ),
+			( $b->{last_run} ? scalar localtime( SortingManager::lox2unix( $b->{last_run} ) ) : 'never' ),
 			( $backup_due ? 'due' : 'not due' ) ) );
 	}
 

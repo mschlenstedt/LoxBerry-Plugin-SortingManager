@@ -59,7 +59,7 @@ sub local_time {
 	my ($lox) = @_;
 	return undef if ( !$lox );
 	return POSIX::strftime( '%Y-%m-%d %H:%M',
-		localtime( LoxBerry::System::lox2epoch($lox) ) );
+		localtime( SortingManager::lox2unix($lox) ) );
 }
 
 # The configuration is keyed by serial number, the interface speaks Miniserver

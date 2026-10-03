@@ -82,6 +82,8 @@ BEGIN {
 use base 'Exporter';
 our @EXPORT_OK = qw(
 	lox_now
+	lox2unix
+	unix2lox
 	parse_sorting
 	restamp
 	parse_api_value
@@ -116,12 +118,30 @@ sub _dbg { _log( 'DEB', $_[0] ); }
 # Pure helpers - no I/O, no state
 ##################################################################
 
-# Seconds since 2009-01-01 00:00:00 UTC, the epoch Loxone uses everywhere.
-# Deliberately delegated instead of reimplemented: a second implementation
-# would be one timezone bug waiting to happen.
+# Seconds since 2009-01-01 00:00:00 UTC - the base the Loxone App stamps the
+# sorting files with (measured: a change at 13:11:49 CEST carried 560257909).
+# NOT LoxBerry::System::epoch2lox: that one counts in local time, the
+# Miniserver's convention, and would put every copy one or two hours into the
+# future from the app's point of view. Every timestamp of this plugin uses the
+# app's base, so all conversions go through these three functions.
+my $LOX_EPOCH = 1230768000;
+
 sub lox_now
 {
-	return LoxBerry::System::epoch2lox();
+	return unix2lox( time() );
+}
+
+sub unix2lox
+{
+	my ($unix) = @_;
+	return int($unix) - $LOX_EPOCH;
+}
+
+sub lox2unix
+{
+	my ($lox) = @_;
+	return undef if ( !$lox );
+	return int($lox) + $LOX_EPOCH;
 }
 
 # A sorting file is "<ts>/<json>", and the same timestamp appears again inside
@@ -1182,7 +1202,7 @@ sub create_backup
 	my $manifest = {
 		created        => $now,
 		created_iso    => POSIX::strftime( '%Y-%m-%dT%H:%M:%S%z',
-		                                   localtime( LoxBerry::System::lox2epoch($now) ) ),
+		                                   localtime( lox2unix($now) ) ),
 		miniserver     => { serial => $s->{serial}, firmware => $s->{firmware}, msnr => $msnr },
 		plugin_version => $VERSION,
 		trigger        => ( ( $opts{trigger} // '' ) eq 'schedule' ? 'schedule' : 'manual' ),
@@ -1192,7 +1212,7 @@ sub create_backup
 		JSON->new->pretty->canonical(1)->encode($manifest) );
 
 	my $stamp = POSIX::strftime( '%Y%m%d_%H%M%S',
-	                             localtime( LoxBerry::System::lox2epoch($now) ) );
+	                             localtime( lox2unix($now) ) );
 	my $file  = sprintf( '%s/sorting_%s_%s.tar.gz', $dir, _serial_slug($s->{serial}), $stamp );
 
 	if ( ! $tar->write( $file, Archive::Tar::COMPRESS_GZIP() ) ) {
@@ -1513,7 +1533,7 @@ sub backup_due
 	return 0 if ( ref($s) ne 'HASH' or !$s->{enabled} );
 
 	$now = _now() if (!defined $now);
-	my $unix = LoxBerry::System::lox2epoch($now);
+	my $unix = lox2unix($now);
 	my ( $min, $hour, $mday, $mon, $year, $wday ) = ( localtime($unix) )[ 1, 2, 3, 4, 5, 6 ];
 
 	return 0 if ( !grep { $_ == $wday } @{ $s->{days} || [] } );
@@ -1522,7 +1542,7 @@ sub backup_due
 	my $last = $s->{last_run} || 0;
 	return 1 if (!$last);
 
-	my $last_unix = LoxBerry::System::lox2epoch($last);
+	my $last_unix = lox2unix($last);
 	my @lt = localtime($last_unix);
 	return 0 if ( $lt[3] == $mday and $lt[4] == $mon and $lt[5] == $year );
 

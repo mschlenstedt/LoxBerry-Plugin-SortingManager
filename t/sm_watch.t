@@ -22,7 +22,7 @@ my $SERIAL = 'AB:CD:EF:01:02:03';
 my $SRC    = '11111111-1111-1111-111111111111';
 
 # --- Hilfsmittel -----------------------------------------------------------
-sub lox { return LoxBerry::System::epoch2lox( $_[0] ); }
+sub lox { return SortingManager::unix2lox( $_[0] ); }
 
 sub fresh_entry {
 	unlink $SortingManager::config_file;
