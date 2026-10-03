@@ -40,6 +40,10 @@ my $cfg = SortingManager::plugin_config();
 my $now = SortingManager::lox_now();
 my $log;
 
+# Notifications go out by mail and appear in the LoxBerry header, so they
+# follow the language set in LoxBerry like the web interface does.
+my %L = LoxBerry::System::readlanguage( undef, 'language.ini' );
+
 # At level Debug every run is logged, with every decision. Below that the log
 # opens on the first real event only, so an idle run every five minutes does
 # not leave a file behind.
@@ -114,8 +118,7 @@ foreach my $serial ( sort keys %{ $cfg->{miniservers} } ) {
 			}
 			if ( $r->{notify} ) {
 				logger()->WARN("$serial: the Miniserver has to be rebooted for the tablets");
-				LoxBerry::Log::notify( $plugin, 'watch',
-					"Sorting copied to a managed tablet. Reboot the Miniserver to make it appear.", 0 );
+				LoxBerry::Log::notify( $plugin, 'watch', $L{'NOTIFY.REBOOT_PENDING'}, 0 );
 			}
 		}
 	}
@@ -135,7 +138,7 @@ foreach my $serial ( sort keys %{ $cfg->{miniservers} } ) {
 		}
 		else {
 			logger()->ERR( "$serial: backup failed - " . ( $r->{error} // '?' ) );
-			LoxBerry::Log::notify( $plugin, 'watch', 'The scheduled backup failed.', 1 );
+			LoxBerry::Log::notify( $plugin, 'watch', $L{'NOTIFY.BACKUP_FAILED'}, 1 );
 		}
 	}
 }
