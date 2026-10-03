@@ -7,11 +7,6 @@
 #   sm_cli.pl show       --msnr <n> --uuid <uuid>
 #   sm_cli.pl copy       --msnr <n> --source <uuid> --target <name> [--password <pw>]
 #   sm_cli.pl copy       --msnr <n> --source <uuid> --tablet <uuid> [--reboot]
-#   sm_cli.pl revoke-all
-#
-# revoke-all is called by uninstall/uninstall: tokens stay in the Miniserver's
-# token list until they expire, and revoking them needs the password, which is
-# only available while the configuration still exists.
 
 use strict;
 use warnings;
@@ -88,20 +83,6 @@ if ( $command eq 'copy' ) {
 	exit( $r->{ok} ? 0 : 1 );
 }
 
-if ( $command eq 'revoke-all' ) {
-	my $cfg = SortingManager::plugin_config();
-	my $failed = 0;
-	foreach my $serial ( keys %{ $cfg->{miniservers} } ) {
-		my $e = $cfg->{miniservers}{$serial};
-		next if ( !$e->{msnr} );
-		foreach my $t ( @{ $e->{targets} || [] } ) {
-			next if ( !$t->{name} );
-			my $k = LoxBerry::Auth::kill_token( $e->{msnr}, user => $t->{name} );
-			$failed++ if (! $k->{ok});
-		}
-	}
-	exit( $failed ? 1 : 0 );
-}
 
-print STDERR "usage: sm_cli.pl inventory|show|copy|revoke-all [options]\n";
+print STDERR "usage: sm_cli.pl inventory|show|copy [options]\n";
 exit 1;

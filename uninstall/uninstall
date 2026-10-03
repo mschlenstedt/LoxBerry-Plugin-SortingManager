@@ -1,8 +1,11 @@
 #!/bin/bash
 
 # Called by purge_installation("all") BEFORE the plugin directories are removed.
-# Two jobs: revoke the tokens this plugin fetched, and remove the sibling
-# directories the core never cleans up itself.
+# Removes the sibling directories the core never cleans up itself.
+#
+# Tokens the plugin fetched for target users are NOT revoked: revoking needs the
+# user's password, which the plugin never stores. They stay in the Miniserver's
+# token list until they expire, after three months at the latest.
 #
 # Every step is tolerant and the script ends with exit 0 - an exit code above 1
 # would abort the deinstallation.
@@ -11,17 +14,6 @@
 
 ARGV3=$3
 ARGV5=$5
-
-BINDIR="$ARGV5/bin/plugins/$ARGV3"
-
-# Tokens live in the Miniserver's token list until they expire - up to three
-# months. Revoking needs the password, which is only available while the
-# configuration is still there, so this has to happen now.
-if [ -x "$BINDIR/sm_cli.pl" ]; then
-	su loxberry -c "$BINDIR/sm_cli.pl revoke-all" >/dev/null 2>&1 \
-		&& echo "<INFO> Tokens revoked." \
-		|| echo "<INFO> Could not revoke all tokens - they will expire on their own."
-fi
 
 for part in config data; do
 	rm -rf "$ARGV5/$part/plugins/.$ARGV3.upgrade"
