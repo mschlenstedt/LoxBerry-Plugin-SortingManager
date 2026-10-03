@@ -20,7 +20,11 @@ my $q   = $cgi->Vars;
 
 my $version = LoxBerry::System::pluginversion();
 
+my $WIKI = 'https://wiki.loxberry.de/plugins/sortingmanager/start';
+
 $q->{form} = 'overview' if ( !$q->{form} );
+# Keeps the chosen Miniserver when switching tabs
+my $ms = ( defined $q->{msnr} and $q->{msnr} =~ /^\d+$/ ) ? "&msnr=$q->{msnr}" : '';
 
 my $template;
 my $templateout;
@@ -66,67 +70,43 @@ sub preparetemplate
 		die_on_bad_params => 0,
 	);
 	%L = LoxBerry::System::readlanguage( $templateout, 'language.ini' );
+	$templateout->param( WIKI_URL => $WIKI );
 
 	# Navbar entries. Numeric keys control the display order.
 	our %navbar;
 
 	$navbar{10}{Name}   = $L{'COMMON.TAB_OVERVIEW'};
-	$navbar{10}{URL}    = 'index.cgi?form=overview';
+	$navbar{10}{URL}    = "index.cgi?form=overview$ms";
 	$navbar{10}{active} = 1 if ( $q->{form} eq 'overview' );
 
 	$navbar{20}{Name}   = $L{'COMMON.TAB_WATCH'};
-	$navbar{20}{URL}    = 'index.cgi?form=watch';
+	$navbar{20}{URL}    = "index.cgi?form=watch$ms";
 	$navbar{20}{active} = 1 if ( $q->{form} eq 'watch' );
 
 	$navbar{30}{Name}   = $L{'COMMON.TAB_BACKUP'};
-	$navbar{30}{URL}    = 'index.cgi?form=backup';
+	$navbar{30}{URL}    = "index.cgi?form=backup$ms";
 	$navbar{30}{active} = 1 if ( $q->{form} eq 'backup' );
 
-	# Not a tab of ours: a link to the Miniserver, opened in a new window.
-	# Which one is a guess - the first configured, or the one the interface was
-	# last pointed at.
-	my $msurl = &miniserver_url();
-	if ($msurl) {
-		$navbar{40}{Name}   = $L{'COMMON.TAB_MINISERVER'};
-		$navbar{40}{URL}    = $msurl;
-		$navbar{40}{target} = '_blank';
-	}
 
 	$navbar{50}{Name}   = $L{'COMMON.TAB_LOGFILES'};
-	$navbar{50}{URL}    = 'index.cgi?form=logfiles';
+	$navbar{50}{URL}    = "index.cgi?form=logfiles$ms";
 	$navbar{50}{active} = 1 if ( $q->{form} eq 'logfiles' );
 
 	return ();
 }
 
-sub miniserver_url
-{
-	my %ms = LoxBerry::System::get_miniservers();
-	return undef if ( !%ms );
-
-	my $msnr = ( $q->{msnr} and $ms{ $q->{msnr} } )
-		? $q->{msnr}
-		: ( sort { $a <=> $b } keys %ms )[0];
-
-	my $m = $ms{$msnr};
-	my $scheme = $m->{Preferhttps} ? 'https' : 'http';
-	my $port   = $m->{Preferhttps} ? $m->{Porthttps} : $m->{Port};
-	my $host   = $m->{Ipaddress};
-	return undef if ( !$host );
-	return ( $port and $port != 80 and $port != 443 )
-		? "$scheme://$host:$port/"
-		: "$scheme://$host/";
-}
 
 sub printtemplate
 {
 	# "nojqm" selects the LoxBerry Design System instead of jQuery Mobile.
 	LoxBerry::Web::lbheader(
 		$L{'COMMON.PLUGIN_TITLE'} . " V$version",
-		'https://wiki.loxberry.de/plugins/sortingmanager/start',
+		$WIKI,
 		'', 'nojqm'
 	);
 	print LoxBerry::Log::get_notifications_html($lbpplugindir);
+	# Own styles on top of the Design System, tokens only
+	print "<style>\n" . LoxBerry::System::read_file("$lbptemplatedir/style.css") . "</style>\n";
 	print $templateout->output();
 	LoxBerry::Web::lbfooter();
 	return ();

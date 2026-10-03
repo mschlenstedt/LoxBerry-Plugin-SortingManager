@@ -10,10 +10,13 @@ use JSON;
 
 use lib File::Spec->catdir( $FindBin::Bin, '..', 'bin' );
 use SortingManager;
+use lib $FindBin::Bin;
+use FakeLog;
 use LoxBerry::System;
 
 my $dir = tempdir( CLEANUP => 1 );
 $SortingManager::config_file = "$dir/pluginconfig.json";
+$SortingManager::history_dir = "$dir/hist";
 
 my $SERIAL = 'AB:CD:EF:01:02:03';
 my $SRC    = '11111111-1111-1111-111111111111';
@@ -186,5 +189,88 @@ SortingManager::save_config($cfg);
 $r = SortingManager::run_watch(1);
 is( $r->{changed}, 1,                'Tablet wird geschrieben' );
 is( $r->{notify},  'rebootrequired', 'und der noetige Reboot gemeldet' );
+
+# ==========================================================================
+# Verlauf
+# ==========================================================================
+my $H = 'CD:EF:00:11:22:33';
+is_deeply( SortingManager::watch_history($H), [], 'ohne Datei ist der Verlauf leer' );
+SortingManager::push_history( $H, { ts => $_, result => 'unchanged' } ) foreach ( 1 .. 12 );
+my $hist = SortingManager::watch_history($H);
+is( scalar(@$hist), 10, 'der Verlauf haelt hoechstens zehn Eintraege' );
+is( $hist->[0]{ts}, 12, 'neueste zuerst' );
+is( $hist->[9]{ts}, 3,  'die aeltesten fallen heraus' );
+
+open( my $bad, '>', SortingManager::history_file($H) ) or die; print $bad '{kaputt'; close($bad);
+is_deeply( SortingManager::watch_history($H), [], 'kaputte Datei gilt als leer' );
+SortingManager::push_history( $H, { ts => 99, result => 'unchanged' } );
+is( SortingManager::watch_history($H)->[0]{ts}, 99, 'und wird beim naechsten Eintrag sauber ersetzt' );
+{
+	local $SortingManager::history_dir = undef;
+	local $LoxBerry::System::lbpdatadir = '';
+	is( SortingManager::history_file($H), undef, 'ohne Ablage kein Dateiname' );
+}
+
+# --- run_watch schreibt in den Verlauf -------------------------------------
+@jobs = ();
+( $cfg, $e ) = fresh_entry();
+$e->{watch}{last_source_ts} = $source_ts;
+SortingManager::save_config($cfg);
+$r = SortingManager::run_watch(1);
+my $h0 = SortingManager::watch_history($SERIAL)->[0];
+is( $h0->{result}, 'unchanged', 'unveraenderte Quelle: Eintrag unchanged' );
+ok( !$h0->{manual}, 'ohne manual nicht als von Hand markiert' );
+ok( $h0->{ts} > 0, 'mit Zeitpunkt' );
+
+# "Jetzt pruefen" darf bei unveraenderter Quelle nichts kopieren
+@jobs = ();
+$r = SortingManager::run_watch( 1, manual => 1 );
+is( $r->{changed}, 0, 'manual kopiert unveraenderte Quelle nicht' );
+is( scalar(@jobs), 0, 'kein Kopierlauf' );
+is( SortingManager::watch_history($SERIAL)->[0]{manual}, 1, 'Eintrag als von Hand markiert' );
+
+@jobs = ();
+( $cfg, $e ) = fresh_entry();
+$e->{targets} = [ { uuid => '22222222-2222-2222-222222222222', name => 'gast', type => 'user' },
+                  { uuid => 'bbbbbbbb-bbbb-bbbb-bbbbbbbbbbbb', name => 'Flur', type => 'tablet' } ];
+$e->{watch}{last_source_ts} = 555000000;
+SortingManager::save_config($cfg);
+$r = SortingManager::run_watch(1);
+$h0 = SortingManager::watch_history($SERIAL)->[0];
+is( $h0->{result}, 'changed', 'geaenderte Quelle: Eintrag changed' );
+is( $h0->{copied}, 2, 'mit Anzahl der erfolgreichen Ziele' );
+is( $h0->{failed}, 0, 'und der fehlgeschlagenen' );
+is( $h0->{reboot}, 'pending', 'gemeldeter Neustart' );
+
+{
+	no warnings 'redefine';
+	local *SortingManager::read_sorting = sub { return { ok => 0, error => 'ftpfailed' }; };
+	$r = SortingManager::run_watch(1);
+}
+$h0 = SortingManager::watch_history($SERIAL)->[0];
+is( $h0->{result}, 'error',     'fehlgeschlagenes Lesen: Eintrag error' );
+is( $h0->{error},  'ftpfailed', 'mit Fehlerschluessel' );
+
+# --- next_watch ------------------------------------------------------------
+my $nw = { watch => { enabled => 0, interval_min => 15, last_run => 0 } };
+is( SortingManager::next_watch( $nw, 1000 ), undef, 'aus: kein naechster Lauf' );
+$nw->{watch}{enabled} = 1;
+is( SortingManager::next_watch( $nw, 1000 ), 1000, 'noch nie gelaufen: jetzt' );
+$nw->{watch}{last_run} = 5000;
+is( SortingManager::next_watch( $nw, 6000 ), 5900, 'sonst letzter Lauf plus Intervall' );
+
+# --- Debug-Protokoll der Ueberwachung --------------------------------------
+{
+	my $fl = FakeLog->new;
+	SortingManager::set_logger($fl);
+	( $cfg, $e ) = fresh_entry();
+	$e->{watch}{last_source_ts} = $source_ts;
+	SortingManager::save_config($cfg);
+	SortingManager::run_watch(1);
+	my $all = $fl->all;
+	SortingManager::set_logger(undef);
+	like( $all, qr/^DEB .*$source_ts/m, 'der gelesene Stand der Quelle steht im Log' );
+	like( $all, qr/unchanged/i,          'und die Entscheidung' );
+}
 
 done_testing();

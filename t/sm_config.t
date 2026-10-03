@@ -112,6 +112,7 @@ is( $all->[0]{msnr},   1,                   'erster: Nummer' );
 is( $all->[0]{name},   'Haupthaus',         'erster: Name' );
 is( $all->[0]{serial}, 'AB:CD:EF:01:02:03', 'erster: Seriennummer' );
 is( $all->[1]{serial}, 'AB:CD:EF:01:02:04', 'zweiter: Seriennummer' );
+is( $all->[0]{host}, '192.0.2.10', 'erster: Adresse fuer die Statuskarte' );
 
 # --- Ohne Pluginkontext keine Datei am Wurzelverzeichnis --------------------
 {
@@ -122,6 +123,29 @@ is( $all->[1]{serial}, 'AB:CD:EF:01:02:04', 'zweiter: Seriennummer' );
 	is( SortingManager::save_config( SortingManager::_empty_config() ), undef,
 	    'und geschrieben wird gar nicht' );
 	ok( ! -e '/pluginconfig.json', 'nichts im Wurzelverzeichnis angelegt' );
+}
+
+# --- serial_for: Seriennummer auch dann, wenn der Miniserver gerade nicht antwortet
+{
+	my $c = SortingManager::plugin_config();
+	SortingManager::ms_entry( $c, 'AB:CD:EF:01:02:03' )->{msnr} = 1;
+	SortingManager::save_config($c);
+
+	my $up = SortingManager::serial_for(1);
+	is( $up->{ok},     1,                   'serial_for: erreichbar ok' );
+	is( $up->{serial}, 'AB:CD:EF:01:02:03', 'Seriennummer vom Miniserver' );
+	is( $up->{from},   'miniserver',        'Quelle Miniserver' );
+
+	local $SortingManager::api_hook = sub { return ( undef, 'unreachable' ); };
+	my $down = SortingManager::serial_for(1);
+	is( $down->{ok},     1,                   'nicht erreichbar: trotzdem ok' );
+	is( $down->{serial}, 'AB:CD:EF:01:02:03', 'Seriennummer aus der Konfiguration' );
+	is( $down->{from},   'config',            'Quelle Konfiguration' );
+	is( $down->{reachable}, 0,                'und als nicht erreichbar markiert' );
+
+	my $none = SortingManager::serial_for(7);
+	is( $none->{ok},    0,             'unbekannt und nicht erreichbar: kein Ergebnis' );
+	is( $none->{error}, 'unreachable', 'mit dem Fehler des Miniservers' );
 }
 
 done_testing();

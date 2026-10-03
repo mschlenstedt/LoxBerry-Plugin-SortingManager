@@ -34,6 +34,8 @@ close($gfh);
 
 use lib File::Spec->catdir( $FindBin::Bin, '..', 'bin' );
 use SortingManager;
+use lib $FindBin::Bin;
+use FakeLog;
 use LoxBerry::Auth;
 
 $LoxBerry::Auth::store_file = "$home/data/system/tokens.json";
@@ -202,5 +204,19 @@ LoxBerry::Auth::_cache_clear();
 unlink "$home/data/system/tokens.json";
 is( SortingManager::copy_to_user(1, $SRC, 'fremder')->{error}, 'nocredentials',
     'fuer einen anderen Benutzer gilt das nicht' );
+
+# --- Debug-Protokoll -------------------------------------------------------
+{
+	my $fl = FakeLog->new;
+	SortingManager::set_logger($fl);
+	SortingManager::copy_to_user(1, $SRC, 'gast', password => 'geheim');
+	my $all = $fl->all;
+	SortingManager::set_logger(undef);
+	like( $all, qr/^DEB .*gast/m,            'copy_to_user: Debug-Meldungen zum Ziel' );
+	like( $all, qr/password supplied/i,      'vermerkt, dass ein Passwort vorlag' );
+	unlike( $all, qr/geheim/,                'das Passwort selbst steht nie im Log' );
+	like( $all, qr/setusersettings/,         'der Schreibaufruf wird protokolliert' );
+	like( $all, qr/verif/i,                  'die Gegenprobe wird protokolliert' );
+}
 
 done_testing();

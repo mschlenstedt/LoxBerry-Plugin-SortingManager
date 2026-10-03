@@ -16,7 +16,6 @@ use LoxBerry::System;
 # (webfrontend/htmlauth/plugins/<folder>), so the following "use lib" finds the
 # plugin modules without knowing the folder name.
 use lib $lbpbindir;
-use LoxBerry::Auth;
 use SortingManager;
 
 my $cgi    = CGI->new;
@@ -29,6 +28,23 @@ sub out { print JSON->new->canonical(1)->encode( $_[0] ); exit 0; }
 sub err { out( { ok => 0, error => $_[0] } ); }
 
 sub is_post { return ( ( $ENV{REQUEST_METHOD} // '' ) eq 'POST' ); }
+
+# A log session for actions carried out right here instead of in a job
+sub weblog
+{
+	my ($name, $title) = @_;
+	require LoxBerry::Log;
+	my $l = LoxBerry::Log->new(
+		name    => $name,
+		package => $lbpplugindir,
+		logdir  => $lbplogdir,
+		addtime => 1,
+	);
+	$l->LOGSTART($title);
+	SortingManager::set_logger($l);
+	return $l;
+}
+sub debug_level { return ( LoxBerry::System::pluginloglevel() || 0 ) >= 7; }
 
 sub want_json {
 	my ($raw) = @_;
@@ -51,7 +67,9 @@ sub local_time {
 sub entry_for {
 	my ($msnr) = @_;
 	return ( undef, undef, 'nomsnr' ) if ( !defined $msnr or $msnr eq '' );
-	my $s = SortingManager::ms_serial($msnr);
+	# Works from the configuration while the Miniserver is down - settings and
+	# archives stay visible, only what needs the Miniserver fails later on.
+	my $s = SortingManager::serial_for($msnr);
 	return ( undef, undef, ( $s->{error} || 'notreachable' ) ) if (! $s->{ok});
 	my $cfg = SortingManager::plugin_config();
 	my $e   = SortingManager::ms_entry( $cfg, $s->{serial} );
@@ -72,6 +90,13 @@ if ( $action eq 'miniservers' ) {
 			and $cfg->{miniservers}{ $m->{serial} }{source} ) ? 1 : 0;
 	}
 	out( { ok => 1, miniservers => $list } );
+}
+
+# Light check whether the Miniserver answers - the interface asks this every
+# few seconds while one is down, e.g. during a reboot.
+if ( $action eq 'reach' ) {
+	my $s = SortingManager::ms_serial( $q->{msnr} );
+	out( { ok => ( $s->{ok} ? 1 : 0 ), serial => $s->{serial}, firmware => $s->{firmware}, error => $s->{error} } );
 }
 
 if ( $action eq 'inventory' ) {
@@ -103,34 +128,49 @@ if ( $action eq 'config' ) {
 	out( { ok => 1, config => $entry } );
 }
 
+# Everything the watch tab shows: settings, what is watched, the next check and
+# the last runs.
+if ( $action eq 'watchstatus' ) {
+	my ( $cfg, $entry, $e ) = entry_for( $q->{msnr} );
+	err($e) if ($e);
+	my $s    = SortingManager::serial_for( $q->{msnr} );
+	my $hist = SortingManager::watch_history( $s->{serial} );
+	$_->{ts_local} = local_time( $_->{ts} ) foreach (@$hist);
+	my $next = SortingManager::next_watch( $entry, SortingManager::lox_now() );
+	out( {
+		ok             => 1,
+		watch          => $entry->{watch},
+		source         => $entry->{source},
+		targets        => $entry->{targets},
+		history        => $hist,
+		next_run       => $next,
+		next_run_local => local_time($next),
+		last_run_local => local_time( $entry->{watch}{last_run} ),
+	} );
+}
+
 if ( $action eq 'jobstatus' ) {
 	out( { ok => 1, job => ( SortingManager::job_status() || {} ) } );
 }
 
 if ( $action eq 'backups' ) {
-	my $s = SortingManager::ms_serial( $q->{msnr} );
+	my $s = SortingManager::serial_for( $q->{msnr} );
 	err( $s->{error} || 'notreachable' ) if (! $s->{ok});
 	my $list = SortingManager::list_backups( $s->{serial} );
 	$_->{created_local} = local_time( $_->{created} ) foreach (@$list);
-	out( { ok => 1, backups => $list } );
+	out( { ok => 1, backups => $list,
+	       free_bytes => SortingManager::free_bytes( SortingManager::backup_dir() ) } );
 }
 
 if ( $action eq 'checkrestore' ) {
 	my $file = SortingManager::safe_backup_file( $q->{file} );
 	err('badpath') if (!$file);
-	my $c = SortingManager::check_restore($file);
+	# Which archived users still exist, and how their sorting looks now
+	my $c = SortingManager::restore_preview( $q->{msnr}, $file );
 	err( $c->{error} ) if (! $c->{ok});
-
-	# Which of the archived users still exist? That decides what the restore
-	# dialog may offer.
-	my %alive;
-	my $inv = SortingManager::inventory( $q->{msnr} );
-	if ( $inv->{ok} ) {
-		$alive{ $_->{uuid} } = 1 foreach ( @{ $inv->{entries} } );
-	}
 	foreach my $e ( @{ $c->{manifest}{entries} || [] } ) {
-		$e->{alive}    = $alive{ $e->{uuid} } ? 1 : 0;
-		$e->{ts_local} = local_time( $e->{ts} );
+		$e->{ts_local}         = local_time( $e->{ts} );
+		$e->{current_ts_local} = local_time( $e->{current_ts} );
 	}
 	$c->{manifest}{created_local} = local_time( $c->{manifest}{created} );
 	out($c);
@@ -175,7 +215,14 @@ if ( $action eq 'saveconfig' ) {
 		}
 	}
 
-	err('savefailed') if ( !defined SortingManager::save_config($cfg) );
+	my $l;
+	if ( debug_level() ) {
+		$l = weblog( 'webui', 'Settings saved' );
+		$l->DEB( "saveconfig for Miniserver $q->{msnr}: " . JSON->new->canonical(1)->encode($data) );
+	}
+	my $saved = SortingManager::save_config($cfg);
+	$l->LOGEND( defined $saved ? 'saved' : 'failed' ) if ($l);
+	err('savefailed') if ( !defined $saved );
 	out( { ok => 1 } );
 }
 
@@ -226,13 +273,24 @@ if ( $action eq 'restore' ) {
 if ( $action eq 'deletebackup' ) {
 	my $file = SortingManager::safe_backup_file( $q->{file} );
 	err('badpath') if (!$file);
-	out( SortingManager::delete_backup($file) );
+	my $l = weblog( 'webui', 'Delete archive' );
+	my $r = SortingManager::delete_backup($file);
+	$l->LOGEND( $r->{ok} ? 'done' : 'failed' );
+	out($r);
 }
 
 if ( $action eq 'watchnow' ) {
 	my ( $cfg, $entry, $e ) = entry_for( $q->{msnr} );
 	err($e) if ($e);
-	out( SortingManager::run_watch( $q->{msnr}, force => 1 ) );
+	# A check, not a forced copy: an unchanged source copies nothing.
+	my $l = weblog( 'watch', "Check by hand, Miniserver $q->{msnr}" );
+	my $r = SortingManager::run_watch( $q->{msnr}, manual => 1 );
+	if    ( $r->{skipped} ) { $l->INF('nothing to watch yet'); }
+	elsif ( !$r->{ok} )     { $l->ERR( 'check failed - ' . ( $r->{error} // '?' ) ); }
+	elsif ( $r->{changed} ) { $l->OK('source had changed and was copied'); }
+	else                    { $l->OK('source unchanged'); }
+	$l->LOGEND('done');
+	out($r);
 }
 
 err('unknownaction');

@@ -42,6 +42,19 @@ my $log    = LoxBerry::Log->new(
 my $kind = $spec->{kind} // '';
 my $msnr = $spec->{msnr};
 $log->LOGSTART("Job: $kind");
+SortingManager::set_logger($log);
+
+# What was ordered - names only, never a password
+$log->DEB( "Job: kind $kind, Miniserver " . ( $msnr // '?' ) );
+$log->DEB( "Job: source " . ( $spec->{source} // '-' ) ) if ( $kind eq 'copy' );
+$log->DEB( "Job: targets " . join( ', ', map { ( $_->{name} // '?' ) . ' (' . ( $_->{type} // '?' ) . ', ' . ( $_->{method} // '-' ) . ')' } @{ $spec->{targets} } ) )
+	if ( ref( $spec->{targets} ) eq 'ARRAY' );
+$log->DEB( "Job: archive $spec->{file}" ) if ( $spec->{file} );
+$log->DEB( "Job: only " . join( ', ', @{ $spec->{only} } ) ) if ( ref( $spec->{only} ) eq 'ARRAY' );
+$log->DEB( "Job: passwords entered for " . join( ', ', sort keys %{ $spec->{passwords} } ) )
+	if ( ref( $spec->{passwords} ) eq 'HASH' and %{ $spec->{passwords} } );
+$log->DEB( "Job: reboot afterwards: " . ( $spec->{auto_reboot} ? 'yes' : 'no' ) ) if ( $kind ne 'backup' );
+$log->DEB( "Job: keep $spec->{keep} archives" ) if ( defined $spec->{keep} );
 
 # run_copy_job writes its own progress after every target. Backup and restore
 # are single steps, so the beginning and the end are written here - the web
@@ -49,7 +62,8 @@ $log->LOGSTART("Job: $kind");
 sub report
 {
 	my (%st) = @_;
-	SortingManager::_write_job( { kind => $kind, pid => $$, %st } );
+	SortingManager::_write_job( { kind => $kind, msnr => $msnr, pid => $$,
+		( $spec->{file} ? ( file => $spec->{file} ) : () ), %st } );
 }
 
 if ( $kind eq 'copy' ) {
@@ -81,12 +95,14 @@ elsif ( $kind eq 'backup' ) {
 		: $log->ERR( 'backup failed - ' . ( $r->{error} // '?' ) );
 }
 elsif ( $kind eq 'restore' ) {
-	report( state => 'running', started => SortingManager::lox_now(),
+	my $started = SortingManager::lox_now();
+	report( state => 'running', started => $started,
 	        total => 0, done => 0, failed => 0, results => [] );
 	my $r = SortingManager::restore_backup( $msnr, $spec->{file},
 		only        => $spec->{only},
 		auto_reboot => ( $spec->{auto_reboot} ? 1 : 0 ),
 		passwords   => $spec->{passwords},
+		progress    => sub { report( state => 'running', started => $started, %{ $_[0] } ) },
 	);
 
 	if (! $r->{ok}) {

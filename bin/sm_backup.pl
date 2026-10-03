@@ -48,6 +48,7 @@ sub open_log
 		addtime => 1,
 	);
 	$log->LOGSTART($title);
+	SortingManager::set_logger($log);
 	return $log;
 }
 

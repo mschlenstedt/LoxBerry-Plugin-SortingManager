@@ -40,6 +40,21 @@ my $cfg = SortingManager::plugin_config();
 my $now = SortingManager::lox_now();
 my $log;
 
+# At level Debug every run is logged, with every decision. Below that the log
+# opens on the first real event only, so an idle run every five minutes does
+# not leave a file behind.
+my $verbose = ( LoxBerry::System::pluginloglevel() || 0 ) >= 7;
+{
+	package SmWatchLog;
+	sub new  { return bless {}, shift; }
+	sub DEB  { return if (!$verbose); main::logger()->DEB( $_[1] ); }
+	sub INF  { main::logger()->INF( $_[1] ); }
+	sub OK   { main::logger()->OK( $_[1] ); }
+	sub WARN { main::logger()->WARN( $_[1] ); }
+	sub ERR  { main::logger()->ERR( $_[1] ); }
+}
+SortingManager::set_logger( SmWatchLog->new );
+
 # Opened on first use only - see the note above.
 sub logger
 {
@@ -61,6 +76,19 @@ foreach my $serial ( sort keys %{ $cfg->{miniservers} } ) {
 
 	my $watch_due  = $force ? 1 : SortingManager::watch_due( $entry, $now );
 	my $backup_due = $force ? 1 : SortingManager::backup_due( $entry, $now );
+	if ($verbose) {
+		my $w = $entry->{watch} || {};
+		my $b = ( $entry->{backup} || {} )->{schedule} || {};
+		logger()->DEB( sprintf( '%s (Miniserver %s): watch %s, every %d min, last run %s -> %s',
+			$serial, $msnr, ( $w->{enabled} ? 'on' : 'off' ), $w->{interval_min} || 15,
+			( $w->{last_run} ? scalar localtime( LoxBerry::System::lox2epoch( $w->{last_run} ) ) : 'never' ),
+			( $watch_due ? 'due' : 'not due' ) ) );
+		logger()->DEB( sprintf( '%s: backup schedule %s, days [%s] at %02d:%02d, every %d week(s), last run %s -> %s',
+			$serial, ( $b->{enabled} ? 'on' : 'off' ), join( ',', @{ $b->{days} || [] } ), $b->{hour} || 0, $b->{minute} || 0,
+			$b->{every_weeks} || 1,
+			( $b->{last_run} ? scalar localtime( LoxBerry::System::lox2epoch( $b->{last_run} ) ) : 'never' ),
+			( $backup_due ? 'due' : 'not due' ) ) );
+	}
 
 	if ($dry) {
 		printf "%s watch=%d backup=%d\n", $serial, $watch_due, $backup_due
@@ -93,7 +121,8 @@ foreach my $serial ( sort keys %{ $cfg->{miniservers} } ) {
 	}
 
 	if ($backup_due) {
-		my $r = SortingManager::create_backup( $msnr, keep => ( $entry->{backup}{keep} || 10 ) );
+		my $r = SortingManager::create_backup( $msnr, keep => ( $entry->{backup}{keep} || 10 ),
+		                                       trigger => 'schedule' );
 		if ( $r->{ok} ) {
 			logger()->OK( sprintf( '%s: backup written - %d entries, %d bytes',
 			                       $serial, $r->{entries}, $r->{bytes} ) );

@@ -59,8 +59,9 @@ foreach my $tab (qw( tab_overview tab_watch tab_backup tab_logfiles )) {
 
 	# Welche Platzhalter kommen vor? LOGLIST fuellt index.cgi selbst.
 	my %used;
-	$used{$1} = 1 while ( $raw =~ /<TMPL_VAR\s+([A-Za-z0-9_.]+)\s*>/g );
-	delete $used{LOGLIST};
+	$used{$1} = 1 while ( $raw =~ /<TMPL_VAR\s+([A-Za-z0-9_.]+)(?:\s+ESCAPE=\w+)?\s*>/g );
+	# Filled by index.cgi itself
+	delete @used{qw( LOGLIST WIKI_URL )};
 
 	my @missing = grep { !exists $DE{$_} } sort keys %used;
 	is_deeply( \@missing, [], "$tab: jeder Platzhalter hat eine Uebersetzung" );
@@ -73,7 +74,7 @@ foreach my $tab (qw( tab_overview tab_watch tab_backup tab_logfiles )) {
 			loop_context_vars => 1,
 			die_on_bad_params => 0,
 		);
-		$t->param( %DE, LOGLIST => '' );
+		$t->param( %DE, LOGLIST => '', WIKI_URL => 'https://example.org/' );
 		$out = $t->output();
 		1;
 	};
@@ -88,17 +89,13 @@ foreach my $tab (qw( tab_overview tab_watch tab_backup tab_logfiles )) {
 # Ein Tippfehler in einer ID faellt sonst erst im Browser auf, und dort nur
 # als "der Knopf tut nichts".
 my %ids = (
-	tab_overview => [ qw( ms-select inv-body inv-orphans auto-reboot
-	                      btn-save-selection btn-copy job-box job-title job-list
-	                      pw-dialog pw-fields btn-pw-ok btn-pw-cancel inv-message ) ],
-	tab_watch    => [ qw( ms-select watch-form watch-notconfigured watch-enabled
-	                      watch-interval watch-reboot watch-last watch-lastts
-	                      btn-watch-now btn-watch-save watch-message ) ],
-	tab_backup   => [ qw( ms-select btn-backup-now backup-keep sched-enabled
-	                      sched-days sched-hour sched-minute sched-weeks
-	                      btn-backup-save backup-list restore-dialog
-	                      restore-entries restore-info restore-reboot
-	                      btn-restore-confirm btn-restore-cancel backup-message ) ],
+	tab_overview => [ qw( sm-page ov-switch ov-card ov-error ov-src ov-src-off ov-tgt ov-quick
+	                      ov-orphans ov-bar ov-notes ) ],
+	tab_watch    => [ qw( sm-page ctx w-error w-notconf w-card w-on w-dot w-state w-sub w-toast
+	                      w-now w-what w-hist w-set w-int w-rb ) ],
+	tab_backup   => [ qw( sm-page ctx b-error b-card b-on b-next b-next-sub b-keepinfo b-keepsub
+	                      b-space b-free b-now b-runline b-sched b-toast b-dep b-days b-time
+	                      b-nodays b-rep b-keep b-count b-list ) ],
 );
 
 foreach my $tab ( sort keys %ids ) {
@@ -106,5 +103,37 @@ foreach my $tab ( sort keys %ids ) {
 	my @gone = grep { $html !~ /id="\Q$_\E"/ } @{ $ids{$tab} };
 	is_deeply( \@gone, [], "$tab: alle vom JavaScript erwarteten IDs sind da" );
 }
+
+# --- Gestaltung nur ueber Design-System-Variablen --------------------------
+my $css = slurp("$tpldir/style.css");
+unlike( $css, qr/#[0-9a-f]{3,8}\b/i, 'style.css: keine feste Farbe' );
+unlike( $css, qr/\brgba?\(/,        'style.css: kein rgb()' );
+unlike( $js,  qr/\b(confirm|alert|prompt)\s*\(/, 'javascript.js: keine Browser-Dialoge' );
+# Das Auge schaltet ein Passwortfeld auf type=text - wer ueber den Typ sucht,
+# verliert das Passwort, sobald jemand es sich angesehen hat.
+unlike( $js, qr/input\[type=password\]/, 'javascript.js: Passwortfelder nicht ueber ihren Typ suchen' );
+like( $js, qr/function errorBox[^\n]*\n(?:[^\n]*\n){0,4}?[^\n]*data-close/, 'javascript.js: Fehlermeldungen lassen sich schliessen' );
+# Deeplink in die Loxone App (Aufbau wie bei exo.loxone.com: loxone://ms?mac=<12 Hex>)
+# Jeder Fehlerschluessel, den Modul, Auth-Lib oder ajax.cgi liefern, hat einen Text -
+# sonst steht in der Oberflaeche "Unbekannter Fehler (unreachable)".
+my @errkeys = qw( unreachable notreachable parseerror ftpfailed httperror badcredentials
+                  nocredentials nopassword notoken revoked missingright msnotfound fwtooold
+                  verifyfailed notfound jobrunning nobackupdir nojobdir writefailed deletefailed
+                  unreadable nomanifest missinginarchive inventoryfailed forkfailed badpath
+                  baddata savefailed postrequired unknownaction notconfigured nosource
+                  notargets nomsnr nominiserver connection );
+my @untranslated = grep { !exists $DE{ 'ERR.' . uc($_) } } @errkeys;
+is_deeply( \@untranslated, [], 'jeder Fehlerschluessel hat einen Text' );
+
+# Nicht erreichbar: Knopf zum erneuten Pruefen und selbststaendige Pruefung
+like( $js, qr/function loadError[\s\S]{0,1500}"reach"/, 'javascript.js: Ladefehler pruefen die Erreichbarkeit selbst nach' );
+like( $js, qr/function loadError[\s\S]{0,1500}data-retry/, 'javascript.js: Ladefehler haben einen Knopf zum erneuten Pruefen' );
+my $ajax = slurp( File::Spec->catfile( $FindBin::Bin, '..', 'webfrontend', 'htmlauth', 'ajax.cgi' ) );
+like( $ajax, qr/\$action eq 'reach'/, "ajax.cgi: Aktion 'reach'" );
+
+like( $js, qr{loxone://ms\?mac=}, 'javascript.js: Knopf "In Loxone App oeffnen"' );
+like( $js, qr/function appButton[\s\S]{0,600}COMMON\.OPEN_APP_SHORT/, 'javascript.js: App-Knopf mit kurzer Beschriftung' );
+my $cgi = slurp( File::Spec->catfile( $FindBin::Bin, '..', 'webfrontend', 'htmlauth', 'index.cgi' ) );
+unlike( $cgi, qr/TAB_MINISERVER/, 'index.cgi: kein Reiter Miniserver mehr' );
 
 done_testing();

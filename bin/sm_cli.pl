@@ -18,7 +18,6 @@ use warnings;
 use Getopt::Long;
 use JSON;
 use LoxBerry::System;
-use LoxBerry::Auth;
 use FindBin;
 use lib $FindBin::RealBin;   # the plugin bin directory - its name is dynamic
 use SortingManager;

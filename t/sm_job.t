@@ -9,6 +9,8 @@ use JSON;
 
 use lib File::Spec->catdir( $FindBin::Bin, '..', 'bin' );
 use SortingManager;
+use lib $FindBin::Bin;
+use FakeLog;
 
 my $dir = tempdir( CLEANUP => 1 );
 $SortingManager::job_file = "$dir/job.json";
@@ -117,6 +119,7 @@ my $sp = SortingManager::spawn_job( { kind => 'backup', msnr => 1 } );
 is( $sp->{ok},  1,    'nach einem abgeschlossenen Lauf wird gestartet' );
 is( $sp->{pid}, 4711, 'die gemeldete PID kommt zurueck' );
 is( scalar(@spawned), 1, 'der Runner wurde einmal gestartet' );
+is( SortingManager::job_status()->{msnr}, 1, 'der Startzustand nennt den Miniserver' );
 
 # Der Auftrag liegt als Datei bereit
 my $specfile = $spawned[0];
@@ -153,4 +156,47 @@ set_status( state => 'starting', pid => 0, started => SortingManager::lox_now() 
 is( SortingManager::spawn_job( { kind => 'copy' } )->{ok}, 1,
     'ein haengengebliebener Start blockiert nicht ewig' );
 
+# --- Fortschritt: das gerade bearbeitete Ziel steht im Jobstatus ----------
+{
+	my @snaps;
+	no warnings 'redefine';
+	local *SortingManager::_write_job = sub { my %c = %{ $_[0] }; push @snaps, \%c; return 1; };
+	SortingManager::run_copy_job(1, {
+		source  => 'quelle-uuid',
+		targets => [ { uuid => 'uuid-a', name => 'chef', type => 'user' },
+		             { uuid => 'uuid-b', name => 'Flur', type => 'tablet' } ],
+		auto_reboot => 0,
+	});
+	my @cur = grep { defined $_->{current} } @snaps;
+	ok( ( grep { $_->{current} eq 'uuid-a' and $_->{done} == 0 } @cur ), 'Ziel 1 wird als laufend gemeldet' );
+	ok( ( grep { $_->{current} eq 'uuid-b' and $_->{done} == 1 } @cur ), 'Ziel 2 nach Ziel 1' );
+	is( $snaps[-1]{state}, 'done', 'letzter Stand ist fertig' );
+	ok( !exists $snaps[-1]{current}, 'und ohne laufendes Ziel' );
+}
+
+# --- Debug-Protokoll des Kopierjobs ---------------------------------------
+{
+	my $fl = FakeLog->new;
+	SortingManager::set_logger($fl);
+	SortingManager::run_copy_job(1, {
+		source  => 'quelle-uuid',
+		targets => [ { uuid => 'u1', name => 'chef', type => 'user' },
+		             { uuid => 'u2', name => 'gast', type => 'user' } ],
+		passwords => { gast => 'streng-geheim' },
+	});
+	my $all = $fl->all;
+	SortingManager::set_logger(undef);
+	like( $all, qr/^DEB .*1\/2.*chef/m, 'Ziel 1 von 2 mit Namen' );
+	like( $all, qr/^DEB .*2\/2.*gast/m, 'Ziel 2 von 2 mit Namen' );
+	like( $all, qr/^OK .*chef/m,        'Erfolg je Ziel' );
+	like( $all, qr/^ERR .*gast.*nocredentials/m, 'Fehler je Ziel mit Schluessel' );
+	unlike( $all, qr/streng-geheim/,    'kein Passwort im Log' );
+}
+
+# Ein Restore nennt sein Archiv, damit ein zweiter Tab den Fortschritt zuordnen kann
+set_status( state => 'done', pid => $$ );
+SortingManager::spawn_job( { kind => 'restore', msnr => 1, file => '/x/sorting_A_1.tar.gz' } );
+is( SortingManager::job_status()->{file}, '/x/sorting_A_1.tar.gz', 'der Startzustand eines Restores nennt das Archiv' );
+
 done_testing();
+

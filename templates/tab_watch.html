@@ -1,57 +1,54 @@
-<div class="lb-content">
+<div class="lb-content" id="sm-page" data-form="watch">
 
-<h2><TMPL_VAR WATCH.TITLE></h2>
-<p class="sm-hint"><TMPL_VAR WATCH.HINT></p>
+<div class="sm-ctx" id="ctx"></div>
 
-<div class="lb-form-row" id="ms-row" style="display:none;">
-	<label class="lb-form-label" for="ms-select"><TMPL_VAR COMMON.MINISERVER></label>
-	<div class="lb-form-field">
-		<select class="lb-input" id="ms-select"></select>
-	</div>
+<h2 class="sm-title"><TMPL_VAR WATCH.TITLE></h2>
+<p class="sm-lead"><TMPL_VAR WATCH.LEAD></p>
+
+<div id="w-error"></div>
+
+<div class="lb-callout" id="w-notconf" hidden>
+	<span class="lb-callout-title"><TMPL_VAR WATCH.NOTCONF_TITLE></span>
+	<p><TMPL_VAR WATCH.NOTCONF> <a class="sm-link" data-link="overview" href="index.cgi?form=overview"><TMPL_VAR WATCH.CHANGE></a></p>
 </div>
 
-<div id="watch-notconfigured" class="sm-warning" style="display:none;">
-	<TMPL_VAR WATCH.NOT_CONFIGURED>
-</div>
-
-<div id="watch-form">
-
-	<div class="lb-form-row">
-		<label class="lb-form-label" for="watch-enabled"><TMPL_VAR WATCH.ENABLED></label>
-		<div class="lb-form-field"><input type="checkbox" id="watch-enabled"></div>
-	</div>
-
-	<div class="lb-form-row">
-		<label class="lb-form-label" for="watch-interval"><TMPL_VAR WATCH.INTERVAL></label>
-		<div class="lb-form-field">
-			<input class="lb-input sm-number" type="number" id="watch-interval" min="5" step="5" value="15">
+<div class="lb-card sm-wcard" id="w-card">
+	<div class="sm-whead">
+		<label class="lb-toggle"><input type="checkbox" id="w-on" aria-label="<TMPL_VAR WATCH.TITLE>"><span class="lb-toggle-slider"></span></label>
+		<div class="grow">
+			<div class="big"><span class="sm-dot off" id="w-dot"></span><span id="w-state"><TMPL_VAR COMMON.LOADING></span></div>
+			<span class="sm-sub" id="w-sub"></span>
 		</div>
-		<div class="lb-form-help"><TMPL_VAR WATCH.INTERVAL_HINT></div>
+		<span class="sm-toast" id="w-toast" role="status"><i class="pi pi-check"></i><TMPL_VAR COMMON.SAVED></span>
+		<button type="button" class="lb-btn" id="w-now"><i class="pi pi-refresh"></i> <TMPL_VAR WATCH.BTN_NOW></button>
 	</div>
+	<div class="sm-wwhat" id="w-what"></div>
+	<ul class="sm-hist" id="w-hist"></ul>
+</div>
 
+<div class="sm-set" id="w-set">
+	<h3><TMPL_VAR WATCH.SETTINGS></h3>
 	<div class="lb-form-row">
-		<label class="lb-form-label" for="watch-reboot"><TMPL_VAR WATCH.AUTO_REBOOT></label>
-		<div class="lb-form-field"><input type="checkbox" id="watch-reboot"></div>
-		<div class="lb-form-help"><TMPL_VAR WATCH.AUTO_REBOOT_HINT></div>
+		<label class="lb-form-label"><TMPL_VAR WATCH.INTERVAL></label>
+		<div class="lb-form-field">
+			<div class="lb-btn-group" id="w-int" role="radiogroup" aria-label="<TMPL_VAR WATCH.INTERVAL>">
+				<input type="radio" name="w-int" id="w-int-5" value="5"><label for="w-int-5"><TMPL_VAR WATCH.I5></label>
+				<input type="radio" name="w-int" id="w-int-15" value="15"><label for="w-int-15"><TMPL_VAR WATCH.I15></label>
+				<input type="radio" name="w-int" id="w-int-30" value="30"><label for="w-int-30"><TMPL_VAR WATCH.I30></label>
+				<input type="radio" name="w-int" id="w-int-60" value="60"><label for="w-int-60"><TMPL_VAR WATCH.I60></label>
+				<input type="radio" name="w-int" id="w-int-1440" value="1440"><label for="w-int-1440"><TMPL_VAR WATCH.I1440></label>
+			</div>
+		</div>
 	</div>
-
 	<div class="lb-form-row">
-		<label class="lb-form-label"><TMPL_VAR WATCH.LAST_RUN></label>
-		<div class="lb-form-field"><span id="watch-last">–</span></div>
+		<label class="lb-form-label"><TMPL_VAR WATCH.TABLETS></label>
+		<div class="lb-form-field">
+			<div class="sm-radios" id="w-rb" role="radiogroup" aria-label="<TMPL_VAR WATCH.TABLETS>">
+				<label class="sm-radio"><input type="radio" name="w-rb" value="0"><span><b><TMPL_VAR WATCH.RB_NOTIFY></b><span class="sm-sub"><TMPL_VAR WATCH.RB_NOTIFY_SUB></span></span></label>
+				<label class="sm-radio"><input type="radio" name="w-rb" value="1"><span><b><TMPL_VAR WATCH.RB_AUTO></b><span class="sm-sub"><TMPL_VAR WATCH.RB_AUTO_SUB></span></span></label>
+			</div>
+		</div>
 	</div>
-
-	<div class="lb-form-row">
-		<label class="lb-form-label"><TMPL_VAR WATCH.LAST_TS></label>
-		<div class="lb-form-field"><span id="watch-lastts">–</span></div>
-	</div>
-
-	<div id="watch-message" class="sm-msg" style="display:none;"></div>
-
-	<div class="lb-actions">
-		<button type="button" class="lb-btn" id="btn-watch-now"><TMPL_VAR WATCH.BTN_RUN_NOW></button>
-		<button type="button" class="lb-btn lb-btn-primary" id="btn-watch-save"><TMPL_VAR COMMON.SAVE></button>
-	</div>
-
 </div>
 
 </div>

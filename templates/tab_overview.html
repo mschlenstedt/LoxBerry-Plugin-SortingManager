@@ -1,64 +1,38 @@
-<div class="lb-content">
+<div class="lb-content" id="sm-page" data-form="overview">
 
-<h2><TMPL_VAR OVERVIEW.TITLE></h2>
-<p class="sm-hint"><TMPL_VAR OVERVIEW.HINT></p>
+<div class="sm-switch" id="ov-switch"></div>
+<div id="ov-card"></div>
 
-<div class="lb-form-row" id="ms-row" style="display:none;">
-	<label class="lb-form-label" for="ms-select"><TMPL_VAR COMMON.MINISERVER></label>
-	<div class="lb-form-field">
-		<select class="lb-input" id="ms-select"></select>
+<h2 class="sm-title"><TMPL_VAR OVERVIEW.TITLE></h2>
+<p class="sm-lead"><TMPL_VAR OVERVIEW.LEAD> <a href="<TMPL_VAR WIKI_URL>" target="_blank" rel="noopener"><TMPL_VAR COMMON.MORE></a></p>
+
+<div id="ov-error"></div>
+
+<div class="sm-ft">
+	<div class="sm-ft-col">
+		<h3><TMPL_VAR OVERVIEW.FROM></h3>
+		<div class="sm-list" id="ov-src"><p class="sm-muted"><TMPL_VAR COMMON.LOADING></p></div>
+		<div class="sm-ft-off" id="ov-src-off"></div>
+	</div>
+	<div class="sm-ft-arrow" aria-hidden="true"><i class="pi pi-arrow-right"></i></div>
+	<div class="sm-ft-col">
+		<h3><TMPL_VAR OVERVIEW.TO>
+			<span class="sm-ft-quick" id="ov-quick">
+				<button type="button" class="lb-btn lb-btn-sm" data-quick="user"><TMPL_VAR OVERVIEW.QUICK_USERS></button>
+				<button type="button" class="lb-btn lb-btn-sm" data-quick="tablet"><TMPL_VAR OVERVIEW.QUICK_TABLETS></button>
+				<button type="button" class="lb-btn lb-btn-sm" data-quick="none"><TMPL_VAR OVERVIEW.QUICK_NONE></button>
+			</span>
+		</h3>
+		<div class="sm-list" id="ov-tgt"></div>
 	</div>
 </div>
 
-<div id="inv-message" class="sm-msg" style="display:none;"></div>
+<p class="sm-orph" id="ov-orphans" hidden></p>
 
-<table class="sm-table" id="inv-table">
-	<thead>
-		<tr>
-			<th class="sm-col-narrow"><TMPL_VAR OVERVIEW.COL_SOURCE></th>
-			<th class="sm-col-narrow"><TMPL_VAR OVERVIEW.COL_TARGET></th>
-			<th><TMPL_VAR OVERVIEW.COL_NAME></th>
-			<th><TMPL_VAR OVERVIEW.COL_TYPE></th>
-			<th><TMPL_VAR OVERVIEW.COL_SORTING></th>
-			<th><TMPL_VAR OVERVIEW.COL_TS></th>
-			<th><TMPL_VAR OVERVIEW.COL_TOKEN></th>
-			<th><TMPL_VAR OVERVIEW.COL_METHOD></th>
-		</tr>
-	</thead>
-	<tbody id="inv-body">
-		<tr><td colspan="8"><TMPL_VAR COMMON.LOADING></td></tr>
-	</tbody>
-</table>
+<!-- Summary, reboot switch and the two buttons; during a copy the progress -->
+<div class="sm-bar" id="ov-bar"></div>
 
-<p class="sm-orphans" id="inv-orphans" style="display:none;"></p>
-
-<div class="sm-reboot-row">
-	<label><input type="checkbox" id="auto-reboot"> <TMPL_VAR OVERVIEW.AUTO_REBOOT></label>
-	<div class="lb-form-help"><TMPL_VAR OVERVIEW.REBOOT_HINT></div>
-</div>
-
-<div class="lb-actions">
-	<button type="button" class="lb-btn" id="btn-save-selection"><TMPL_VAR OVERVIEW.BTN_SAVE_SELECTION></button>
-	<button type="button" class="lb-btn lb-btn-primary" id="btn-copy"><TMPL_VAR OVERVIEW.BTN_COPY></button>
-</div>
-
-<!-- Progress of the detached copy job. Filled while it runs. -->
-<div class="sm-job" id="job-box" style="display:none;">
-	<p class="sm-job-title" id="job-title"></p>
-	<ul class="sm-job-list" id="job-list"></ul>
-</div>
-
-<!-- Asked for only when a target needs a password: no valid token stored. -->
-<div class="sm-dialog" id="pw-dialog" style="display:none;">
-	<div class="sm-dialog-box">
-		<h3><TMPL_VAR OVERVIEW.PW_TITLE></h3>
-		<p class="sm-hint"><TMPL_VAR OVERVIEW.PW_BODY></p>
-		<div id="pw-fields"></div>
-		<div class="lb-actions">
-			<button type="button" class="lb-btn" id="btn-pw-cancel"><TMPL_VAR COMMON.CANCEL></button>
-			<button type="button" class="lb-btn lb-btn-primary" id="btn-pw-ok"><TMPL_VAR OVERVIEW.BTN_COPY></button>
-		</div>
-	</div>
-</div>
+<!-- Callouts after a copy: reboot, tablets, failed targets -->
+<div id="ov-notes"></div>
 
 </div>

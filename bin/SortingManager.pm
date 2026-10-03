@@ -18,7 +18,66 @@ use Net::FTP;
 use File::Path qw( make_path );
 use Archive::Tar;
 use POSIX ();
-use LoxBerry::Auth;
+use File::Basename ();
+use File::Spec ();
+use version ();
+
+##################################################################
+# LoxBerry::Auth - from the core or bundled with the plugin
+##################################################################
+
+# The plugin ships its own copy in bin/lib/LoxBerry/Auth.pm, so new lib
+# features can be used before the core releases them. The core's copy wins as
+# soon as it is at least as new as the bundled one. The decision reads $VERSION
+# from the files without loading either - a loaded module cannot be swapped.
+#
+# Everything else in the plugin gets the lib through this module and must not
+# "use LoxBerry::Auth" before it, or the core's copy is loaded unconditionally.
+
+# Version string from "our $VERSION = '...'" of a module file; undef if the
+# file is missing or has no version.
+sub lib_version
+{
+	my ($file) = @_;
+	return undef if ( !defined $file or !-r $file );
+	open( my $fh, '<', $file ) or return undef;
+	while ( my $line = <$fh> ) {
+		if ( $line =~ /^\s*(?:our\s+)?\$VERSION\s*=\s*["']([^"']+)["']/ ) {
+			close($fh);
+			return $1;
+		}
+	}
+	close($fh);
+	return undef;
+}
+
+# { source => 'core' | 'plugin', file => <path>, version => <string> }
+# An unreadable core version counts as older than the bundled one.
+sub auth_lib_choice
+{
+	my ($core_file, $bundled_file) = @_;
+	my $bundled = { source => 'plugin', file => $bundled_file, version => lib_version($bundled_file) };
+	my $core_version = lib_version($core_file);
+	return $bundled if ( !defined $core_version );
+	my $newer = eval { version->parse($core_version) >= version->parse( $bundled->{version} ) };
+	return $bundled if ( !$newer );
+	return { source => 'core', file => $core_file, version => $core_version };
+}
+
+# The choice that was made when this module was loaded
+our $auth_lib;
+
+BEGIN {
+	my $libdir = File::Spec->catdir( File::Basename::dirname( File::Spec->rel2abs(__FILE__) ), 'lib' );
+	# The core lib lives next to LoxBerry::System, which is loaded above
+	my $core = defined $INC{'LoxBerry/System.pm'}
+		? File::Spec->catfile( File::Basename::dirname( $INC{'LoxBerry/System.pm'} ), 'Auth.pm' )
+		: undef;
+	$auth_lib = auth_lib_choice( $core, File::Spec->catfile( $libdir, 'LoxBerry', 'Auth.pm' ) );
+	# local: the bundled directory must not stay in @INC for other modules
+	local @INC = $auth_lib->{source} eq 'plugin' ? ( $libdir, @INC ) : @INC;
+	require LoxBerry::Auth;
+}
 
 use base 'Exporter';
 our @EXPORT_OK = qw(
@@ -29,10 +88,29 @@ our @EXPORT_OK = qw(
 	control_count
 );
 
-our $VERSION = "0.1";
+our $VERSION = "0.9.0";
 our $DEBUG = 0;
 
-sub _dbg { print STDERR "SortingManager: $_[0]\n" if ($DEBUG); }
+# Logging. The entry scripts (job, watch, backup, CLI) hand over their
+# LoxBerry::Log object; its level - set in the plugin management - decides what
+# lands in the file. Without one (tests, plain CGI reads) messages only go to
+# STDERR, and only with $DEBUG. Passwords and tokens are never logged.
+our $log;
+sub set_logger { $log = $_[0]; return; }
+
+my %LOGFN = ( DEB => 'DEB', INF => 'INF', OK => 'OK', WARN => 'WARN', ERR => 'ERR' );
+sub _log
+{
+	my ($lvl, $msg) = @_;
+	if ($log) {
+		my $fn = $LOGFN{$lvl} || 'INF';
+		eval { $log->$fn($msg); };
+		return;
+	}
+	print STDERR "SortingManager: [$lvl] $msg\n" if ($DEBUG);
+	return;
+}
+sub _dbg { _log( 'DEB', $_[0] ); }
 
 ##################################################################
 # Pure helpers - no I/O, no state
@@ -143,9 +221,10 @@ sub plugin_config
 	my $cfg;
 	eval { $cfg = JSON::from_json( _slurp($file) ); };
 	if ($@ or ref($cfg) ne 'HASH') {
-		_dbg("pluginconfig.json is not readable JSON - starting empty");
+		_log( 'WARN', "config: $file is not readable JSON - starting empty" );
 		return _empty_config();
 	}
+	_dbg("config: read $file");
 	$cfg->{MAIN}        = {} if (ref($cfg->{MAIN}) ne 'HASH');
 	$cfg->{miniservers} = {} if (ref($cfg->{miniservers}) ne 'HASH');
 	return $cfg;
@@ -164,12 +243,15 @@ sub save_config
 	my $new = _encode_config($cfg);
 	if ( -e $file ) {
 		my $old = _slurp($file);
-		return 0 if ( defined $old and $old eq $new );
+		if ( defined $old and $old eq $new ) {
+			_dbg("config: unchanged, not written");
+			return 0;
+		}
 	}
 
 	my $fh;
 	if ( ! sysopen($fh, $file, O_RDWR | O_CREAT, 0600) ) {
-		_dbg("cannot write $file: $!");
+		_log( 'ERR', "config: cannot write $file: $!" );
 		return undef;
 	}
 	flock($fh, LOCK_EX);
@@ -178,6 +260,7 @@ sub save_config
 	truncate($fh, tell($fh));
 	close($fh);
 	chmod 0600, $file;
+	_dbg( "config: written $file (" . length($new) . " bytes)" );
 	return 1;
 }
 
@@ -230,8 +313,12 @@ sub _fetch_api
 	my ($msnr) = @_;
 	return $api_hook->($msnr) if ($api_hook);
 
+	_dbg("Miniserver $msnr: GET /jdev/cfg/api");
 	my ($content, $info) = LoxBerry::IO::mshttp_call2($msnr, '/jdev/cfg/api');
-	return ( undef, 'unreachable' ) if (!defined $content);
+	if (!defined $content) {
+		_log( 'WARN', "Miniserver $msnr: /jdev/cfg/api did not answer" );
+		return ( undef, 'unreachable' );
+	}
 
 	my $ll;
 	eval { $ll = JSON::from_json($content); };
@@ -248,12 +335,32 @@ sub ms_serial
 	my $api = parse_api_value($value);
 	return { ok => 0, error => 'parseerror' } if (!$api or !$api->{snr});
 
+	_dbg( "Miniserver $msnr: serial " . uc($api->{snr}) . ", firmware " . ( $api->{version} // '?' ) );
 	return { ok => 1, serial => uc($api->{snr}), firmware => $api->{version} };
 }
 
 # Every Miniserver from general.json, with its serial number. Entries whose
 # serial cannot be determined are still listed, with serial => undef, so the
 # web interface can show them as unreachable instead of hiding them.
+# The serial of a Miniserver even while it is down: from the Miniserver when it
+# answers, otherwise from the plugin configuration, which stores every entry
+# under its serial. Keeps archives and settings visible during a reboot.
+sub serial_for
+{
+	my ($msnr) = @_;
+	my $s = ms_serial($msnr);
+	return { ok => 1, serial => $s->{serial}, firmware => $s->{firmware}, from => 'miniserver', reachable => 1 }
+		if ( $s->{ok} );
+	my $cfg = plugin_config();
+	foreach my $serial ( sort keys %{ $cfg->{miniservers} } ) {
+		my $e = $cfg->{miniservers}{$serial};
+		next if ( ref($e) ne 'HASH' or !defined $e->{msnr} or "$e->{msnr}" ne "$msnr" );
+		_dbg("Miniserver $msnr: not reachable, serial $serial taken from the configuration");
+		return { ok => 1, serial => $serial, from => 'config', reachable => 0 };
+	}
+	return { ok => 0, error => ( $s->{error} || 'unreachable' ) };
+}
+
 sub known_miniservers
 {
 	my %miniservers = LoxBerry::System::get_miniservers();
@@ -263,6 +370,7 @@ sub known_miniservers
 		push @out, {
 			msnr     => $msnr,
 			name     => $miniservers{$msnr}{Name},
+			host     => $miniservers{$msnr}{IPAddress},
 			serial   => ( $s->{ok} ? $s->{serial}   : undef ),
 			firmware => ( $s->{ok} ? $s->{firmware} : undef ),
 			error    => ( $s->{ok} ? undef          : $s->{error} ),
@@ -284,8 +392,13 @@ sub _fetch_userlist
 {
 	my ($msnr) = @_;
 	return $userlist_hook->($msnr) if ($userlist_hook);
+	_dbg("Miniserver $msnr: GET /jdev/sps/getuserlist2 (basic auth, LoxBerry credentials)");
 	my ($content) = LoxBerry::IO::mshttp_call2($msnr, '/jdev/sps/getuserlist2');
-	return ( undef, 'unreachable' ) if (!defined $content);
+	if (!defined $content) {
+		_log( 'WARN', "Miniserver $msnr: user list did not answer" );
+		return ( undef, 'unreachable' );
+	}
+	_dbg( "Miniserver $msnr: user list " . length($content) . " bytes" );
 	return ( $content, undef );
 }
 
@@ -293,8 +406,12 @@ sub _fetch_pairing
 {
 	my ($msnr) = @_;
 	return $pairing_hook->($msnr) if ($pairing_hook);
+	_dbg("Miniserver $msnr: GET /jdev/sps/apppairing/list");
 	my ($content) = LoxBerry::IO::mshttp_call2($msnr, '/jdev/sps/apppairing/list');
-	return ( undef, 'unreachable' ) if (!defined $content);
+	if (!defined $content) {
+		_log( 'WARN', "Miniserver $msnr: tablet list did not answer" );
+		return ( undef, 'unreachable' );
+	}
 	return ( $content, undef );
 }
 
@@ -384,6 +501,9 @@ sub users_and_tablets
 		}
 	}
 
+	_dbg( "users: " . join( ', ', map { "$_->{name} ($_->{type})" } @users ) );
+	_dbg( "tablets: " . ( @tablets ? join( ', ', map { $_->{name} // $_->{uuid} } @tablets ) : 'none' ) );
+	_log( 'WARN', "tablet list unusable: $terr" ) if ($terr);
 	return {
 		ok            => 1,
 		users         => \@users,
@@ -414,32 +534,33 @@ sub ftp_connect
 	return undef if (!$msc);
 
 	my $port = LoxBerry::System::get_ftpport($msnr);
+	_dbg( "FTP: connecting to $msc->{IPAddress}:" . ( $port ? $port : 21 ) . " as $msc->{Admin_RAW}" );
 	my $ftp = Net::FTP->new( $msc->{IPAddress},
 		Port    => ( $port ? $port : 21 ),
 		Timeout => 15,
 		Passive => 1,
 	);
 	if (!$ftp) {
-		_dbg("FTP connect to $msc->{IPAddress} failed");
+		_log( 'ERR', "FTP: connect to $msc->{IPAddress} failed: $@" );
 		return undef;
 	}
 	if ( ! $ftp->login( $msc->{Admin_RAW}, $msc->{Pass_RAW} ) ) {
-		_dbg("FTP login failed: " . $ftp->message);
+		_log( 'ERR', "FTP: login as $msc->{Admin_RAW} failed: " . $ftp->message );
 		$ftp->quit;
 		return undef;
 	}
 	$ftp->binary();
+	_dbg("FTP: logged in");
 	return $ftp;
 }
 
 # Which sortings exist, keyed by user UUID. Only .json files count - the
 # directory also holds older .xml leftovers that are none of our business.
-sub list_sortings
+# Listing and reading work on an open connection, so the inventory can do all
+# of it over one login instead of one per file.
+sub _ftp_list
 {
-	my ($msnr) = @_;
-	my $ftp = ftp_connect($msnr);
-	return { ok => 0, error => 'ftpfailed' } if (!$ftp);
-
+	my ($ftp) = @_;
 	my %files;
 	foreach my $path ( $ftp->ls($SORTING_DIR) ) {
 		my $name = $path;
@@ -449,8 +570,35 @@ sub list_sortings
 		my $size = $ftp->size($path);
 		$files{$uuid} = defined $size ? $size : 0;
 	}
+	_dbg( "FTP: " . scalar( keys %files ) . " sorting files in $SORTING_DIR" );
+	return \%files;
+}
+
+sub _ftp_read
+{
+	my ($ftp, $uuid) = @_;
+	my $raw = '';
+	CORE::open( my $fh, '>', \$raw ) or return { ok => 0, error => 'ioerror' };
+	my $got = $ftp->get( "$SORTING_DIR/$uuid.json", $fh );
+	close($fh);
+	if (!$got) {
+		_log( 'WARN', "read $uuid.json: not found" );
+		return { ok => 0, error => 'notfound' };
+	}
+	my $p = parse_sorting($raw);
+	return { ok => 0, error => $p->{error} } if (!$p->{ok});
+	_dbg( "read $uuid.json: " . length($raw) . " bytes, ts $p->{ts}" );
+	return { ok => 1, ts => $p->{ts}, data => $p->{data}, raw => $raw };
+}
+
+sub list_sortings
+{
+	my ($msnr) = @_;
+	my $ftp = ftp_connect($msnr);
+	return { ok => 0, error => 'ftpfailed' } if (!$ftp);
+	my $files = _ftp_list($ftp);
 	$ftp->quit;
-	return { ok => 1, files => \%files };
+	return { ok => 1, files => $files };
 }
 
 sub read_sorting
@@ -460,17 +608,9 @@ sub read_sorting
 
 	my $ftp = ftp_connect($msnr);
 	return { ok => 0, error => 'ftpfailed' } if (!$ftp);
-
-	my $raw = '';
-	CORE::open( my $fh, '>', \$raw ) or do { $ftp->quit; return { ok => 0, error => 'ioerror' }; };
-	my $got = $ftp->get( "$SORTING_DIR/$uuid.json", $fh );
-	close($fh);
+	my $r = _ftp_read( $ftp, $uuid );
 	$ftp->quit;
-	return { ok => 0, error => 'notfound' } if (!$got);
-
-	my $p = parse_sorting($raw);
-	return { ok => 0, error => $p->{error} } if (!$p->{ok});
-	return { ok => 1, ts => $p->{ts}, data => $p->{data}, raw => $raw };
+	return $r;
 }
 
 # Only used for managed tablets. Normal users are written through
@@ -485,11 +625,16 @@ sub write_sorting_ftp
 	return { ok => 0, error => 'ftpfailed' } if (!$ftp);
 
 	my $copy = $raw;
+	_dbg( "FTP: writing $SORTING_DIR/$uuid.json (" . length($raw) . " bytes)" );
 	CORE::open( my $fh, '<', \$copy ) or do { $ftp->quit; return { ok => 0, error => 'ioerror' }; };
 	my $put = $ftp->put( $fh, "$SORTING_DIR/$uuid.json" );
 	close($fh);
 	$ftp->quit;
-	return { ok => 0, error => 'writefailed' } if (!$put);
+	if (!$put) {
+		_log( 'ERR', "FTP: writing $uuid.json failed" );
+		return { ok => 0, error => 'writefailed' };
+	}
+	_dbg("FTP: $uuid.json written");
 	return { ok => 1 };
 }
 
@@ -499,12 +644,15 @@ sub write_sorting_ftp
 
 sub inventory
 {
-	my ($msnr) = @_;
+	my ($msnr, %opts) = @_;
 
 	my $ut = users_and_tablets($msnr);
 	return $ut if (! $ut->{ok});
 
-	my $files = list_sortings($msnr);
+	# One FTP login for the listing and every file. keep_raw hands the contents
+	# on, so a backup does not read every file a second time.
+	my $ftp   = ftp_connect($msnr);
+	my $files = $ftp ? { ok => 1, files => _ftp_list($ftp) } : { ok => 0, error => 'ftpfailed' };
 	my %have  = $files->{ok} ? %{ $files->{files} } : ();
 
 	my @entries;
@@ -513,8 +661,9 @@ sub inventory
 		if ( exists $have{ $row{uuid} } ) {
 			$row{has_sorting} = 1;
 			$row{bytes}       = $have{ $row{uuid} };
-			my $r = read_sorting( $msnr, $row{uuid} );
-			$row{ts} = $r->{ok} ? $r->{ts} : undef;
+			my $r = _ftp_read( $ftp, $row{uuid} );
+			$row{ts}  = $r->{ok} ? $r->{ts} : undef;
+			$row{raw} = $r->{raw} if ( $opts{keep_raw} and $r->{ok} );
 			delete $have{ $row{uuid} };
 		}
 		else {
@@ -526,7 +675,12 @@ sub inventory
 
 	# Whatever is left belongs to no user: device UUIDs, control UUIDs, or
 	# accounts that were deleted. Reported, never written to.
+	$ftp->quit if ($ftp);
 	my @orphans = sort keys %have;
+	_log( 'INF', sprintf( 'inventory: %d entries, %d with sorting, %d orphaned files',
+	                      scalar(@entries), scalar( grep { $_->{has_sorting} } @entries ), scalar(@orphans) ) );
+	_dbg( "inventory: " . join( ', ', map { "$_->{name}=" . ( $_->{has_sorting} ? "ts " . ( $_->{ts} // '?' ) : 'none' ) } @entries ) );
+	_log( 'WARN', "inventory: FTP listing failed ($files->{error})" ) if (! $files->{ok});
 
 	return {
 		ok            => 1,
@@ -553,11 +707,13 @@ sub _source_data
 	my ($msnr, $src_uuid, $raw) = @_;
 
 	if ( defined $raw ) {
+		_dbg( "source: template from the archive (" . length($raw) . " bytes)" );
 		my $p = parse_sorting($raw);
 		return ( undef, $p->{error} ) if (! $p->{ok});
 		return ( $p->{data}, undef );
 	}
 	return ( undef, 'nosource' ) if (!$src_uuid);
+	_dbg("source: reading $src_uuid");
 
 	my $src = read_sorting($msnr, $src_uuid);
 	return ( undef, $src->{error} ) if (! $src->{ok});
@@ -595,11 +751,17 @@ sub copy_to_user
 	my $password = defined $opts{password} ? $opts{password}
 	                                      : _known_password( $msnr, $target_name );
 
+	_dbg( "user $target_name: restamped to ts $ts, " . length($body) . " bytes" );
+	_dbg( "user $target_name: password supplied: " . ( defined $opts{password} ? 'yes (entered)'
+	      : defined $password ? 'yes (LoxBerry Miniserver credentials)' : 'no - a stored token is needed' ) );
 	my %authopts = ( user => $target_name, method => 'POST', content => $body );
 	$authopts{password} = $password if ( defined $password );
 
+	_dbg("user $target_name: POST /jdev/sps/setusersettings");
 	my ($resp, $info) = LoxBerry::Auth::request( $msnr, '/jdev/sps/setusersettings', %authopts );
 	if ( $info->{error} ) {
+		_log( 'ERR', "user $target_name: setusersettings failed - " . ( $info->{errcode} || 'httperror' )
+		             . ( $info->{message} ? " ($info->{message})" : '' ) );
 		return {
 			ok      => 0,
 			error   => ( $info->{errcode} || 'httperror' ),
@@ -612,8 +774,12 @@ sub copy_to_user
 	if ( !defined $opts{verify} or $opts{verify} ) {
 		my %vopts = ( user => $target_name );
 		$vopts{password} = $password if ( defined $password );
+		_dbg("user $target_name: verifying via GET /jdev/sps/getusersettings");
 		my ($back) = LoxBerry::Auth::request( $msnr, '/jdev/sps/getusersettings', %vopts );
+		_log( 'WARN', "user $target_name: verify read gave no answer - write is assumed to be done" ) if ( !defined $back );
+		_dbg("user $target_name: verified, Miniserver reports ts $ts") if ( defined $back and index($back, "$ts") >= 0 );
 		if ( defined $back and index($back, "$ts") < 0 ) {
+			_log( 'ERR', "user $target_name: verify failed - the Miniserver did not report ts $ts back" );
 			return { ok => 0, error => 'verifyfailed',
 			         message => 'the Miniserver did not report the new timestamp back' };
 		}
@@ -633,6 +799,7 @@ sub copy_to_tablet
 	my $ts   = lox_now();
 	my $body = restamp( $data, $ts );
 
+	_dbg( "tablet $tablet_uuid: restamped to ts $ts, " . length($body) . " bytes" );
 	my $w = write_sorting_ftp( $msnr, $tablet_uuid, $body );
 	return { ok => 0, error => $w->{error} } if (! $w->{ok});
 
@@ -652,7 +819,10 @@ sub copy_to_tablet
 sub reboot_miniserver
 {
 	my ($msnr) = @_;
+	_log( 'WARN', "Miniserver $msnr: requesting a reboot (GET /jdev/sys/reboot)" );
 	my ($resp, $info) = LoxBerry::Auth::request( $msnr, '/jdev/sys/reboot' );
+	_log( $info->{error} ? 'ERR' : 'OK', "Miniserver $msnr: reboot " . ( $info->{error}
+	      ? 'failed - ' . ( $info->{errcode} || 'httperror' ) . ( $info->{message} ? " ($info->{message})" : '' ) : 'accepted' ) );
 	return { ok => 0, error => ( $info->{errcode} || 'httperror' ), message => $info->{message} }
 		if ( $info->{error} );
 	return { ok => 1 };
@@ -749,6 +919,9 @@ sub spawn_job
 		state   => 'starting',
 		pid     => 0,
 		kind    => $spec->{kind},
+		msnr    => $spec->{msnr},
+		# A restore names its archive, so a second tab can show its progress
+		( $spec->{file} ? ( file => $spec->{file} ) : () ),
 		started => _now(),
 		total   => scalar( @{ $spec->{targets} || [] } ),
 		done    => 0,
@@ -756,6 +929,7 @@ sub spawn_job
 	} );
 
 	my $runner = $job_runner || "$LoxBerry::System::lbpbindir/sm_job.pl";
+	_dbg( "job: starting $spec->{kind} for Miniserver " . ( $spec->{msnr} // '?' ) );
 	my $pid;
 	if ($spawn_hook) {
 		$pid = $spawn_hook->( $runner, $file );
@@ -842,8 +1016,21 @@ sub run_copy_job
 	_write_job( \%state );
 
 	my $tablet_written = 0;
+	_log( 'INF', "copy: source $spec->{source} to " . scalar(@targets) . " targets"
+	             . ( $spec->{auto_reboot} ? ', reboot afterwards if a tablet was written' : '' ) );
+	if ( ref( $spec->{passwords} ) eq 'HASH' and %{ $spec->{passwords} } ) {
+		_dbg( "copy: passwords entered for " . join( ', ', sort keys %{ $spec->{passwords} } ) );
+	}
+	my $n = 0;
 
 	foreach my $t (@targets) {
+		$n++;
+		_dbg( sprintf( 'copy: target %d/%d: %s (%s, %s)', $n, scalar(@targets), $t->{name} // '?',
+		               $t->{type} // '?', ( ( $t->{type} // '' ) eq 'tablet' ? 'FTP + reboot' : 'token' ) ) );
+		# The interface marks the target being worked on
+		$state{current} = defined $t->{uuid} ? $t->{uuid} : $t->{name};
+		_write_job( \%state );
+
 		my $res;
 		if ( ($t->{type} || '') eq 'tablet' ) {
 			$res = copy_to_tablet( $msnr, $spec->{source}, $t->{uuid} );
@@ -868,8 +1055,15 @@ sub run_copy_job
 		};
 		$state{done}++;
 		$state{failed}++ if (! $res->{ok});
+		$res->{ok}
+			? _log( 'OK', "copy: $t->{name}: copied, ts $res->{ts}" . ( defined $res->{controls} ? ", $res->{controls} controls" : '' ) )
+			: _log( 'ERR', "copy: $t->{name}: " . ( $res->{error} // '?' ) . ( $res->{message} ? " ($res->{message})" : '' ) );
 		_write_job( \%state );
 	}
+	delete $state{current};
+	_log( 'INF', sprintf( 'copy: %d of %d targets copied', $state{done} - $state{failed}, $state{done} ) );
+	_log( 'INF', 'copy: a tablet was written - reboot ' . ( $spec->{auto_reboot} ? 'follows' : 'required, not triggered' ) )
+		if ($tablet_written);
 
 	if ( $tablet_written ) {
 		if ( $spec->{auto_reboot} ) {
@@ -927,7 +1121,7 @@ sub create_backup
 	my $s = ms_serial($msnr);
 	return { ok => 0, error => $s->{error} } if (! $s->{ok});
 
-	my $inv = inventory($msnr);
+	my $inv = inventory( $msnr, keep_raw => 1 );
 	return { ok => 0, error => ( $inv->{error} || 'inventoryfailed' ) } if (! $inv->{ok});
 
 	my $dir = backup_dir();
@@ -940,11 +1134,21 @@ sub create_backup
 	my $now = lox_now();
 	my $tar = Archive::Tar->new();
 	my @manifest_entries;
+	_log( 'INF', "backup: Miniserver $msnr ($s->{serial}), " . scalar( @{ $inv->{entries} } ) . " users and tablets"
+	             . ( $opts{trigger} ? ", trigger $opts{trigger}" : '' ) );
 
 	foreach my $e ( @{ $inv->{entries} } ) {
-		next if (! $e->{has_sorting});
-		my $r = read_sorting( $msnr, $e->{uuid} );
-		next if (! $r->{ok});
+		if (! $e->{has_sorting}) {
+			_dbg("backup: $e->{name} has no sorting - skipped");
+			next;
+		}
+		# The inventory has read it already; only fall back to reading again
+		my $r = defined $e->{raw} ? { ok => 1, raw => $e->{raw}, ts => $e->{ts} } : read_sorting( $msnr, $e->{uuid} );
+		if (! $r->{ok}) {
+			_log( 'WARN', "backup: $e->{name} could not be read ($r->{error}) - skipped" );
+			next;
+		}
+		_dbg( "backup: added $e->{name} ($e->{type}, $e->{uuid}): " . length( $r->{raw} ) . " bytes, ts $r->{ts}" );
 
 		$tar->add_data( "sortings/$e->{uuid}.json", $r->{raw} );
 		push @manifest_entries, {
@@ -962,6 +1166,7 @@ sub create_backup
 		                                   localtime( LoxBerry::System::lox2epoch($now) ) ),
 		miniserver     => { serial => $s->{serial}, firmware => $s->{firmware}, msnr => $msnr },
 		plugin_version => $VERSION,
+		trigger        => ( ( $opts{trigger} // '' ) eq 'schedule' ? 'schedule' : 'manual' ),
 		entries        => \@manifest_entries,
 	};
 	$tar->add_data( 'manifest.json',
@@ -975,6 +1180,7 @@ sub create_backup
 		return { ok => 0, error => 'writefailed' };
 	}
 	chmod 0600, $file;
+	_log( 'OK', "backup: written $file - " . scalar(@manifest_entries) . " entries, " . ( -s $file ) . " bytes" );
 
 	_prune_backups( $s->{serial}, $opts{keep} ) if ( defined $opts{keep} );
 
@@ -1004,16 +1210,24 @@ sub list_backups
 
 		my $entries;
 		my $created;
+		my $firmware;
+		# Archives from before the trigger field were all written by the schedule
+		# or by hand - "schedule" is the more likely one.
+		my $trigger = 'schedule';
 		my $tar = Archive::Tar->new();
 		if ( eval { $tar->read($file) } ) {
 			my $man;
 			eval { $man = JSON::from_json( $tar->get_content('manifest.json') ); };
 			if ( ref($man) eq 'HASH' ) {
-				$entries = scalar( @{ $man->{entries} || [] } );
-				$created = $man->{created};
+				$entries  = scalar( @{ $man->{entries} || [] } );
+				$created  = $man->{created};
+				$firmware = $man->{miniserver}{firmware} if ( ref( $man->{miniserver} ) eq 'HASH' );
+				$trigger  = $man->{trigger} if ( $man->{trigger} );
 			}
 		}
 		push @out, {
+			trigger  => $trigger,
+			firmware => $firmware,
 			file    => $file,
 			name    => $name,
 			bytes   => ( -s $file ),
@@ -1033,9 +1247,12 @@ sub _prune_backups
 	my ($serial, $keep) = @_;
 	return if ( !defined $keep or $keep <= 0 );
 	my $list = list_backups($serial);
+	_dbg( "prune: " . scalar(@$list) . " archives, keeping $keep" );
 	return if ( scalar(@$list) <= $keep );
 	foreach my $old ( @{$list}[ $keep .. $#$list ] ) {
-		unlink $old->{file};
+		unlink( $old->{file} )
+			? _log( 'INF', "prune: removed $old->{name}" )
+			: _log( 'WARN', "prune: could not remove $old->{name}: $!" );
 	}
 }
 
@@ -1056,6 +1273,41 @@ sub check_restore
 	return { ok => 1, manifest => $man, missing => [], file => $file };
 }
 
+# check_restore plus, per entry, whether the user still exists and the state of
+# their sorting right now - the restore view compares both before anything is
+# overwritten.
+sub restore_preview
+{
+	my ($msnr, $file) = @_;
+	my $c = check_restore($file);
+	return $c if (! $c->{ok});
+	my %now;
+	my $inv = inventory($msnr);
+	if ( $inv->{ok} ) {
+		$now{ $_->{uuid} } = $_ foreach ( @{ $inv->{entries} } );
+	}
+	foreach my $e ( @{ $c->{manifest}{entries} || [] } ) {
+		my $n = $now{ $e->{uuid} };
+		$e->{alive}      = $n ? 1 : 0;
+		$e->{current_ts} = $n ? $n->{ts} : undef;
+		$e->{type_now}   = $n ? $n->{type} : undef;
+	}
+	return $c;
+}
+
+# Free bytes on the file system holding $dir, undef if that cannot be told.
+sub free_bytes
+{
+	my ($dir) = @_;
+	return undef if ( !$dir or ! -d $dir );
+	open( my $df, '-|', 'df', '-Pk', '--', $dir ) or return undef;
+	my @lines = <$df>;
+	close($df);
+	return undef if ( @lines < 2 );
+	my @f = split( /\s+/, $lines[-1] );
+	return ( defined $f[3] and $f[3] =~ /^\d+$/ ) ? $f[3] * 1024 : undef;
+}
+
 ##################################################################
 # Restore
 #
@@ -1070,7 +1322,12 @@ sub restore_backup
 	my ($msnr, $file, %opts) = @_;
 
 	my $c = check_restore($file);
-	return { ok => 0, error => $c->{error} } if (! $c->{ok});
+	if (! $c->{ok}) {
+		_log( 'ERR', "restore: $file unusable ($c->{error})" );
+		return { ok => 0, error => $c->{error} };
+	}
+	_log( 'INF', "restore: $file, " . scalar( @{ $c->{manifest}{entries} || [] } ) . " entries in the archive"
+	             . ( ref( $opts{only} ) eq 'ARRAY' ? ', ' . scalar( @{ $opts{only} } ) . ' selected' : ', all' ) );
 
 	my $tar = Archive::Tar->new();
 	return { ok => 0, error => 'unreadable' } if ( ! eval { $tar->read($file) } );
@@ -1091,14 +1348,37 @@ sub restore_backup
 	my @missing;
 	my $tablet_written = 0;
 
+	# progress: called before every entry and once at the end, so the job can
+	# show which entry is being written.
+	my @todo = grep { ( !%wanted or $wanted{ $_->{uuid} } ) and $known{ $_->{uuid} } }
+	           @{ $c->{manifest}{entries} || [] };
+	my $report = sub {
+		my ($cur) = @_;
+		return if ( ref($opts{progress}) ne 'CODE' );
+		$opts{progress}->( {
+			total   => scalar(@todo),
+			done    => scalar(@results),
+			failed  => scalar( grep { !$_->{ok} } @results ),
+			results => [ @results ],
+			missing => [ @missing ],
+			( defined $cur ? ( current => $cur ) : () ),
+		} );
+	};
+
 	foreach my $e ( @{ $c->{manifest}{entries} || [] } ) {
-		next if ( %wanted and ! $wanted{ $e->{uuid} } );
+		if ( %wanted and ! $wanted{ $e->{uuid} } ) {
+			_dbg("restore: $e->{name} not selected - skipped");
+			next;
+		}
 
 		my $current = $known{ $e->{uuid} };
 		if ( !$current ) {
+			_log( 'WARN', "restore: $e->{name} ($e->{uuid}) no longer exists - skipped" );
 			push @missing, { uuid => $e->{uuid}, name => $e->{name}, type => $e->{type} };
 			next;
 		}
+		$report->( $e->{uuid} );
+		_dbg( "restore: $current->{name} ($current->{type}), archived ts " . ( $e->{ts} // '?' ) );
 
 		my $raw = $tar->get_content("sortings/$e->{uuid}.json");
 		if ( !defined $raw ) {
@@ -1120,6 +1400,9 @@ sub restore_backup
 			$res = copy_to_user( $msnr, undef, $current->{name}, %o );
 		}
 
+		$res->{ok}
+			? _log( 'OK', "restore: $current->{name}: restored, ts $res->{ts}" )
+			: _log( 'ERR', "restore: $current->{name}: " . ( $res->{error} // '?' ) . ( $res->{message} ? " ($res->{message})" : '' ) );
 		push @results, {
 			uuid     => $e->{uuid},
 			name     => $current->{name},
@@ -1131,6 +1414,8 @@ sub restore_backup
 			message  => $res->{message},
 		};
 	}
+
+	$report->(undef);
 
 	my $reboot_pending = 0;
 	if ( $tablet_written ) {
@@ -1165,7 +1450,11 @@ sub delete_backup
 {
 	my ($file) = @_;
 	return { ok => 0, error => 'notfound' } if ( !$file or ! -e $file );
-	return { ok => 0, error => 'deletefailed' } if ( ! unlink($file) );
+	if ( ! unlink($file) ) {
+		_log( 'ERR', "delete: $file could not be removed: $!" );
+		return { ok => 0, error => 'deletefailed' };
+	}
+	_log( 'INF', "delete: $file removed" );
 	return { ok => 1 };
 }
 
@@ -1225,9 +1514,60 @@ sub backup_due
 
 # Detection runs on the timestamp of the source file: if it moved, the user
 # rearranged their app and the targets get the new state.
+# The watch keeps its last runs for the web interface. Kept out of
+# pluginconfig.json: one file per Miniserver, written once per run anyway.
+our $history_dir;
+our $HISTORY_MAX = 10;
+
+sub history_file
+{
+	my ($serial) = @_;
+	my $dir = $history_dir ? $history_dir : $LoxBerry::System::lbpdatadir;
+	return undef if ( !$dir );
+	return "$dir/watch_" . _serial_slug($serial) . ".json";
+}
+
+# Newest first; a missing or broken file is an empty history.
+sub watch_history
+{
+	my ($serial) = @_;
+	my $file = history_file($serial);
+	return [] if ( !$file or ! -e $file );
+	my $h;
+	eval { $h = JSON::from_json( _slurp($file) ); };
+	return ( !$@ and ref($h) eq 'ARRAY' ) ? $h : [];
+}
+
+sub push_history
+{
+	my ($serial, $item) = @_;
+	my $file = history_file($serial);
+	return 0 if (!$file);
+	my $dir = $file;
+	$dir =~ s{/[^/]+$}{};
+	eval { make_path($dir) } if ( ! -d $dir );
+	my @h = ( $item, @{ watch_history($serial) } );
+	splice( @h, $HISTORY_MAX ) if ( @h > $HISTORY_MAX );
+	open( my $fh, '>', "$file.tmp" ) or return 0;
+	print $fh JSON->new->canonical(1)->encode( \@h );
+	close($fh);
+	return rename( "$file.tmp", $file ) ? 1 : 0;
+}
+
+# Lox time of the next check, undef while the watch is off.
+sub next_watch
+{
+	my ($entry, $now) = @_;
+	my $w = $entry->{watch} || {};
+	return undef if ( !$w->{enabled} );
+	return $now if ( !$w->{last_run} );
+	return $w->{last_run} + ( $w->{interval_min} || 15 ) * 60;
+}
+
 sub run_watch
 {
 	my ($msnr, %opts) = @_;
+	my $manual = $opts{manual} ? 1 : 0;
 
 	my $s = ms_serial($msnr);
 	return { ok => 0, error => ( $s->{error} || 'notreachable' ) } if (! $s->{ok});
@@ -1238,21 +1578,33 @@ sub run_watch
 
 	# Not set up yet: leave last_run alone, otherwise the first real run after
 	# the configuration is saved would wait out a whole interval.
-	return { ok => 0, skipped => 1, reason => 'notconfigured' }
-		if ( !$entry->{source} or !@targets );
+	if ( !$entry->{source} or !@targets ) {
+		_dbg("watch $s->{serial}: no source or no targets saved - nothing to watch");
+		return { ok => 0, skipped => 1, reason => 'notconfigured' };
+	}
+	_dbg( "watch $s->{serial}: source $entry->{source}, " . scalar(@targets) . " targets"
+	      . ( $manual ? ', checked by hand' : '' ) . ( $opts{force} ? ', forced' : '' ) );
 
-	my $r = read_sorting( $msnr, $entry->{source} );
-	return { ok => 0, error => ( $r->{error} || 'notfound' ) } if (! $r->{ok});
+	my $now = _now();
+	my $r   = read_sorting( $msnr, $entry->{source} );
+	if (! $r->{ok}) {
+		my $err = $r->{error} || 'notfound';
+		push_history( $s->{serial}, { ts => $now, result => 'error', error => $err, manual => $manual } );
+		return { ok => 0, error => $err };
+	}
 
-	my $now  = _now();
 	my $seen = $entry->{watch}{last_source_ts} || 0;
+	_dbg("watch $s->{serial}: source ts now $r->{ts}, last seen $seen");
 
 	if ( !$opts{force} and "$r->{ts}" eq "$seen" ) {
 		$entry->{watch}{last_run} = $now;
 		save_config($cfg);
+		push_history( $s->{serial}, { ts => $now, result => 'unchanged', manual => $manual } );
+		_dbg("watch $s->{serial}: source unchanged - nothing copied");
 		return { ok => 1, changed => 0, source_ts => $r->{ts} };
 	}
 
+	_log( 'INF', "watch $s->{serial}: source " . ( $opts{force} ? 'copied by force' : 'changed' ) . " - copying" );
 	my $job = run_copy_job( $msnr, {
 		source      => $entry->{source},
 		targets     => \@targets,
@@ -1271,6 +1623,16 @@ sub run_watch
 		copied    => ( $job->{results} || [] ),
 	);
 	$out{notify} = 'rebootrequired' if ( $job->{reboot_pending} );
+
+	my @res = @{ $job->{results} || [] };
+	push_history( $s->{serial}, {
+		ts     => $now,
+		result => 'changed',
+		manual => $manual,
+		copied => scalar( grep { $_->{ok} } @res ),
+		failed => scalar( grep { !$_->{ok} } @res ),
+		reboot => ( $job->{reboot_pending} ? 'pending' : defined $job->{reboot_ok} ? 'done' : undef ),
+	} );
 	return \%out;
 }
 

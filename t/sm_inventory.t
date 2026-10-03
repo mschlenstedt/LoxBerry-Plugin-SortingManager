@@ -220,4 +220,17 @@ is( $itab->{has_sorting},  1,         'das Tablet hat eine' );
 is( scalar( @{ $full->{orphans} } ), 1, 'eine verwaiste Sortierdatei' );
 is( $full->{orphans}[0], 'cccccccc-cccc-cccc-cccccccccccc', 'die richtige' );
 
+# --- Eine FTP-Verbindung fuer das ganze Inventar, Inhalt auf Wunsch ---------
+ok( !exists $ichef->{raw}, 'ohne keep_raw wird kein Inhalt mitgeliefert' );
+{
+	my $conn = 0;
+	my $orig = $SortingManager::ftp_factory;
+	local $SortingManager::ftp_factory = sub { $conn++; return $orig->(@_); };
+	my $wr = SortingManager::inventory( 1, keep_raw => 1 );
+	is( $conn, 1, 'das Inventar kommt mit einer FTP-Verbindung aus' );
+	my ($rchef) = grep { $_->{name} eq 'chef' } @{ $wr->{entries} };
+	is( $rchef->{raw}, '556000001/' . $chef_json, 'keep_raw liefert den gelesenen Inhalt' );
+	is( $rchef->{ts},  556000001,                  'und weiterhin den Zeitstempel' );
+}
+
 done_testing();
