@@ -396,13 +396,18 @@ function msSelect(ms) {
 			return '<option value="' + esc(m.msnr) + '"' + (ms.cur && m.msnr === ms.cur.msnr ? " selected" : "") + ">" + esc(m.name || m.msnr) + "</option>";
 		}).join("") + "</select>";
 }
+// The select with its server icon - the same on every page
+function msPick(ms) {
+	return '<label class="sm-ctx-ms"><i class="pi pi-server"></i>' + msSelect(ms) + "</label>";
+}
 $(document).on("change", "#ms-select", function () { go($(this).val()); });
 $(document).on("change", "input[name=ms-radio]", function () { go($(this).val()); });
 
-// Overview: button group for two to four Miniservers, a select beyond that
+// Overview: button group for two to four Miniservers, a select for one or
+// more than four - the app button needs a choice next to it for its height
 function renderSwitch($el, ms) {
 	var pick = "";
-	if (ms.list.length > 4) { pick = msSelect(ms); }
+	if (ms.list.length === 1 || ms.list.length > 4) { pick = msPick(ms); }
 	else if (ms.list.length > 1) {
 		pick = '<div class="lb-btn-group" role="radiogroup" aria-label="' + esc(T("COMMON.MINISERVER")) + '">' +
 			$.map(ms.list, function (m) {
@@ -416,7 +421,7 @@ function renderSwitch($el, ms) {
 }
 // Watch and backup: one row with select, reachability and one more pill
 function renderContext($el, ms, rightHtml) {
-	$el.html('<span class="sm-pick"><label class="sm-ctx-ms"><i class="pi pi-server"></i>' + msSelect(ms) + "</label>" + appButton(ms.cur) + "</span>" +
+	$el.html('<span class="sm-pick">' + msPick(ms) + appButton(ms.cur) + "</span>" +
 		reachPill(ms.cur, true) + '<div class="sm-ctx-right">' + (rightHtml || "") + "</div>");
 }
 // Deeplink into the Loxone App, built like exo.loxone.com does it: the serial
