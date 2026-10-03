@@ -117,6 +117,33 @@ $SortingManager::pairing_hook = sub {
 my $third = SortingManager::users_and_tablets(1);
 is( scalar( @{ $third->{tablets} } ), 1, 'Huelle mit Array als value' );
 
+# --- Neuere Firmware: getuserlist2 kennt die Tablets selbst ----------------
+# Der Tablet-Benutzer steht dort mit representsControl:true und pairedControl
+# (= Geraete-UUID aus apppairing/list). Er darf nicht zusaetzlich als normaler
+# Benutzer erscheinen - sonst wird ihm eine Token-Kopie angeboten.
+my $userlist_tab = '[{"name":"chef","uniqueUserId":"","uuid":"11111111-1111-1111-111111111111",'
+                 . '"isAdmin":true,"representsControl":false,"userState":0},'
+                 . '{"name":"Flur","uniqueUserId":"","uuid":"bbbbbbbb-bbbb-bbbb-bbbbbbbbbbbb",'
+                 . '"isAdmin":false,"representsControl":true,'
+                 . '"pairedControl":"aaaaaaaa-aaaa-aaaa-aaaaaaaaaaaa","userState":0}]';
+$SortingManager::userlist_hook = sub { return ( $userlist_tab, undef ); };
+$SortingManager::pairing_hook  = sub { return ( $pairing, undef ); };
+my $dup = SortingManager::users_and_tablets(1);
+is_deeply( [ map { $_->{name} } @{ $dup->{users} } ], ['chef'], 'Tablet-Benutzer nicht unter den Benutzern' );
+is( scalar( @{ $dup->{tablets} } ), 1, 'Tablet genau einmal' );
+is( $dup->{tablets}[0]{model}, 'SM-X210', 'Tablet-Daten aus apppairing/list' );
+
+# Faellt apppairing/list aus, bleibt der Tablet-Benutzer trotzdem ein Tablet
+$SortingManager::pairing_hook = sub { return ( undef, 'unreachable' ); };
+my $fallback = SortingManager::users_and_tablets(1);
+is_deeply( [ map { $_->{name} } @{ $fallback->{users} } ], ['chef'], 'auch ohne Pairing-Liste kein Benutzer' );
+is( scalar( @{ $fallback->{tablets} } ), 1, 'Tablet aus getuserlist2' );
+my $fb = $fallback->{tablets}[0];
+is( $fb->{type},        'tablet',                          'Typ tablet' );
+is( $fb->{uuid},        'bbbbbbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Benutzer-UUID' );
+is( $fb->{device_uuid}, 'aaaaaaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Geraete-UUID aus pairedControl' );
+is( $fallback->{tablets_error}, 'unreachable', 'Pairing-Fehler bleibt vermerkt' );
+
 $SortingManager::userlist_hook = sub { return ( $userlist, undef ); };
 $SortingManager::pairing_hook  = sub { return ( $pairing,  undef ); };
 

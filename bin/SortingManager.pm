@@ -447,9 +447,12 @@ sub _decode_list
 	return undef;
 }
 
-# Two sources, because getuserlist2 does not know the managed tablets. In
-# apppairing/list the field "user" is the UUID the sorting file belongs to;
-# "uuid" is the device.
+# Two sources. In apppairing/list the field "user" is the UUID the sorting file
+# belongs to; "uuid" is the device. Newer firmware also lists that tablet user
+# in getuserlist2, marked representsControl with pairedControl = the device.
+# Such a user is a tablet, never a normal user: it has no known password, so a
+# token copy can not work. If apppairing/list fails, getuserlist2 alone still
+# keeps it a tablet.
 sub users_and_tablets
 {
 	my ($msnr) = @_;
@@ -461,8 +464,13 @@ sub users_and_tablets
 	return { ok => 0, error => 'parseerror' } if (!$ulist);
 
 	my @users;
+	my @control_users;
 	foreach my $u (@$ulist) {
 		next if (!$u->{uuid});
+		if ( $u->{representsControl} and $u->{representsControl} ne 'false' ) {
+			push @control_users, $u;
+			next;
+		}
 		my $admin = ( $u->{isAdmin} and $u->{isAdmin} ne 'false' ) ? 1 : 0;
 		push @users, {
 			uuid     => $u->{uuid},
@@ -499,6 +507,17 @@ sub users_and_tablets
 				};
 			}
 		}
+	}
+
+	my %listed = map { $_->{uuid} => 1 } @tablets;
+	foreach my $u (@control_users) {
+		next if ( $listed{ $u->{uuid} } );
+		push @tablets, {
+			uuid        => $u->{uuid},
+			device_uuid => $u->{pairedControl},
+			name        => $u->{name},
+			type        => 'tablet',
+		};
 	}
 
 	_dbg( "users: " . join( ', ', map { "$_->{name} ($_->{type})" } @users ) );
